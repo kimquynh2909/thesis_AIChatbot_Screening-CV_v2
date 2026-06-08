@@ -1,0 +1,7 @@
+Machine Learning Engineer
+
+We are hiring a Machine Learning Engineer with 3+ years of experience building Python-based machine learning systems.
+Required skills include Python, SQL, scikit-learn, PyTorch, natural language processing, LangChain, REST API development, Docker, AWS, and data visualization.
+The candidate should hold a bachelor degree in computer science, data science, or a related field.
+Responsibilities include building ML pipelines, evaluating models, deploying APIs, collaborating with product teams, and documenting model limitations.
+AWS certification is preferred.
