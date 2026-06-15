@@ -66,3 +66,40 @@ def test_matching_service_ranks_candidates() -> None:
     assert results[0].candidate_id == "good"
     assert results[0].rank == 1
     assert results[0].final_score > results[1].final_score
+
+
+def test_matching_service_uses_structured_json_for_hybrid_score() -> None:
+    payload = {
+        "job_description": {
+            "required_skills": ["Kubernetes"],
+            "preferred_skills": [],
+            "tools": [],
+            "education": [],
+            "experience": [],
+        },
+        "resumes": [
+            {
+                "candidate_id": "json_candidate",
+                "filename": "json.txt",
+                "extraction": {
+                    "skills": ["Kubernetes"],
+                    "education": [],
+                    "experience": [],
+                    "projects": [],
+                    "jd_requirements": [
+                        {"requirement": "Kubernetes", "status": "matched", "evidence": "LLM extracted Kubernetes evidence"}
+                    ],
+                },
+            }
+        ],
+    }
+    results = match_resumes(
+        "Need Kubernetes.",
+        [ResumeDocument("json_candidate", "json.txt", "Frontend developer with React experience.")],
+        model_key="tfidf",
+        weights={"semantic": 0.0, "skills": 1.0, "experience": 0.0, "education": 0.0},
+        structured_extraction=payload,
+    )
+    assert results[0].matched_skills == ["kubernetes"]
+    assert results[0].missing_skills == []
+    assert results[0].final_score == 100.0

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -25,12 +26,14 @@ from src.evaluation.benchmark import run_benchmark
 from src.evaluation.visualization import candidate_score_bar, model_comparison_chart
 from src.llm.chatbot_chain import answer_hr_question
 from src.llm.explanation_chain import generate_candidate_explanation
+from src.llm.structured_extraction import extract_screening_json
 from src.preprocessing.document_parser import DocumentParser
 from src.preprocessing.skill_extractor import SkillExtractor
 from src.services.export_service import results_to_csv_bytes, screening_report_markdown
 from src.services.matching_service import ResumeDocument, match_resumes
 from src.services.vector_store_service import QdrantRAGStore, build_rag_context, build_rag_documents
 from src.utils.file_utils import shorten_text
+
 
 
 st.set_page_config(
@@ -49,6 +52,8 @@ def init_state() -> None:
         "explanations": {},
         "chat_history": [],
         "rag_results": [],
+        "structured_extraction": {},
+
     }
     for key, value in defaults.items():
         st.session_state.setdefault(key, value)
@@ -71,77 +76,113 @@ def load_sample_documents() -> tuple[str, list[ResumeDocument]]:
     return jd_text, resumes
 
 
-def display_extracted_keywords() -> None:
-    """Display extracted keywords from JD and resumes for testing."""
-    st.markdown("### 🔍 Extracted Keywords (Skills)")
+# def display_extracted_keywords() -> None:
+#     """Display extracted keywords from JD and resumes for testing."""
+#     st.markdown("### 🔍 Extracted Keywords (Skills)")
     
+#     jd_text = st.session_state.get("jd_text", "")
+#     resume_docs = st.session_state.get("resume_docs", [])
+    
+#     if not jd_text and not resume_docs:
+#         st.info("Upload JD and resumes to see extracted keywords")
+#         return
+    
+#     try:
+#         extractor = SkillExtractor()
+        
+#         # Extract JD keywords
+#         col1, col2 = st.columns(2)
+#         with col1:
+#             if jd_text:
+#                 jd_skills = extractor.extract(jd_text)
+#                 st.markdown("**Job Description Keywords**")
+#                 if jd_skills:
+#                     st.success(f"Found {len(jd_skills)} skills")
+#                     # Display in columns for better layout
+#                     skills_text = ", ".join(jd_skills)
+#                     st.text_area("JD Skills:", value=skills_text, height=100, disabled=True)
+#                 else:
+#                     st.warning("No keywords found")
+        
+#         # Extract Resume keywords
+#         with col2:
+#             if resume_docs:
+#                 st.markdown("**Resume Keywords**")
+#                 for doc in resume_docs:
+#                     resume_skills = extractor.extract(doc.text)
+#                     st.markdown(f"*{doc.filename}*")
+#                     if resume_skills:
+#                         st.success(f"Found {len(resume_skills)} skills")
+#                         skills_text = ", ".join(resume_skills)
+#                         st.text_area(f"Skills: {doc.filename}", value=skills_text, height=80, disabled=True)
+#                     else:
+#                         st.warning("No keywords found")
+        
+#         # Show keyword comparison
+#         if jd_text and resume_docs:
+#             st.markdown("---")
+#             st.markdown("**Keyword Comparison**")
+#             jd_skills = extractor.extract(jd_text)
+            
+#             for doc in resume_docs:
+#                 resume_skills = extractor.extract(doc.text)
+#                 matched = sorted(set(jd_skills) & set(resume_skills))
+#                 missing = sorted(set(jd_skills) - set(resume_skills))
+                
+#                 col_match, col_missing = st.columns(2)
+#                 with col_match:
+#                     st.markdown(f"✅ **Matched** ({doc.filename})")
+#                     if matched:
+#                         st.write(", ".join(matched))
+#                     else:
+#                         st.write("No matches")
+                
+#                 with col_missing:
+#                     st.markdown(f"❌ **Missing** ({doc.filename})")
+#                     if missing:
+#                         st.write(", ".join(missing))
+#                     else:
+#                         st.write("All keywords present!")
+    
+#     except Exception as e:
+#         st.error(f"Error extracting keywords: {e}")
+
+def display_structured_extraction() -> None:
+    st.markdown("### Structured JSON Extraction")
     jd_text = st.session_state.get("jd_text", "")
     resume_docs = st.session_state.get("resume_docs", [])
-    
-    if not jd_text and not resume_docs:
-        st.info("Upload JD and resumes to see extracted keywords")
-        return
-    
-    try:
-        extractor = SkillExtractor()
-        
-        # Extract JD keywords
-        col1, col2 = st.columns(2)
-        with col1:
-            if jd_text:
-                jd_skills = extractor.extract(jd_text)
-                st.markdown("**Job Description Keywords**")
-                if jd_skills:
-                    st.success(f"Found {len(jd_skills)} skills")
-                    # Display in columns for better layout
-                    skills_text = ", ".join(jd_skills)
-                    st.text_area("JD Skills:", value=skills_text, height=100, disabled=True)
-                else:
-                    st.warning("No keywords found")
-        
-        # Extract Resume keywords
-        with col2:
-            if resume_docs:
-                st.markdown("**Resume Keywords**")
-                for doc in resume_docs:
-                    resume_skills = extractor.extract(doc.text)
-                    st.markdown(f"*{doc.filename}*")
-                    if resume_skills:
-                        st.success(f"Found {len(resume_skills)} skills")
-                        skills_text = ", ".join(resume_skills)
-                        st.text_area(f"Skills: {doc.filename}", value=skills_text, height=80, disabled=True)
-                    else:
-                        st.warning("No keywords found")
-        
-        # Show keyword comparison
-        if jd_text and resume_docs:
-            st.markdown("---")
-            st.markdown("**Keyword Comparison**")
-            jd_skills = extractor.extract(jd_text)
-            
-            for doc in resume_docs:
-                resume_skills = extractor.extract(doc.text)
-                matched = sorted(set(jd_skills) & set(resume_skills))
-                missing = sorted(set(jd_skills) - set(resume_skills))
-                
-                col_match, col_missing = st.columns(2)
-                with col_match:
-                    st.markdown(f"✅ **Matched** ({doc.filename})")
-                    if matched:
-                        st.write(", ".join(matched))
-                    else:
-                        st.write("No matches")
-                
-                with col_missing:
-                    st.markdown(f"❌ **Missing** ({doc.filename})")
-                    if missing:
-                        st.write(", ".join(missing))
-                    else:
-                        st.write("All keywords present!")
-    
-    except Exception as e:
-        st.error(f"Error extracting keywords: {e}")
 
+    if not jd_text and not resume_docs:
+        st.info("Upload a job description and resumes to extract structured JSON.")
+        return
+
+    use_llm = st.toggle(
+        "Use Gemini LLM extraction",
+        value=True,
+        help="Uses GOOGLE_API_KEY or GEMINI_API_KEY when configured. If unavailable, the app returns the same JSON schema with deterministic extraction.",
+    )
+
+    if st.button("Extract structured JSON"):
+        try:
+            with st.spinner("Extracting structured JSON..."):
+                st.session_state["structured_extraction"] = extract_screening_json(
+                    jd_text=jd_text,
+                    resumes=resume_docs,
+                    use_llm=use_llm,
+                )
+        except Exception as exc:
+            st.error(str(exc))
+
+    extraction = st.session_state.get("structured_extraction", {})
+    if extraction:
+        json_text = json.dumps(extraction, ensure_ascii=False, indent=2)
+        st.download_button(
+            "Download extraction JSON",
+            data=json_text,
+            file_name="structured_extraction.json",
+            mime="application/json",
+        )
+        st.json(extraction)
 
 def make_weight_controls() -> dict[str, float]:
     st.caption("Hybrid scoring weights")
@@ -255,8 +296,9 @@ def screening_page() -> None:
             st.markdown(f"**{doc.filename}**")
             st.text(shorten_text(doc.text, 1000))
 
-    # Display extracted keywords section
-    display_extracted_keywords()
+    # # Display extracted keywords section
+    # display_extracted_keywords()
+    display_structured_extraction()
 
     st.subheader("Model and Scoring")
     model_label = st.selectbox(
@@ -266,6 +308,18 @@ def screening_page() -> None:
         index=0,
     )
     use_hybrid = st.toggle("Use hybrid score", value=True)
+    use_structured_score = st.toggle(
+        "Use structured JSON for hybrid score",
+        value=True,
+        disabled=not use_hybrid,
+        help="Calculates skill, experience, and education scores from the structured JD/CV JSON instead of raw cleaned text.",
+    )
+    use_llm_scoring_extraction = st.toggle(
+        "Use Gemini extraction during scoring",
+        value=True,
+        disabled=not use_hybrid or not use_structured_score,
+        help="If no extracted JSON is already available, scoring can call Gemini. Without an API key it falls back to deterministic JSON extraction.",
+    )
     weights = make_weight_controls()
 
     if st.button("Run matching", type="primary"):
@@ -277,6 +331,9 @@ def screening_page() -> None:
                     model_key=model_label,
                     weights=weights,
                     use_hybrid_score=use_hybrid,
+                    use_structured_extraction_score=use_structured_score,
+                    use_llm_extraction=use_llm_scoring_extraction,
+                    structured_extraction=st.session_state.get("structured_extraction") or None,
                 )
                 st.session_state["explanations"] = {}
                 st.session_state["chat_history"] = []
@@ -332,6 +389,10 @@ def screening_page() -> None:
         st.write(", ".join(result.missing_skills) or "None detected")
         st.markdown("**Recommendation**")
         st.write(result.recommendation)
+
+    if result.structured_extraction:
+        with st.expander("Structured extraction used for scoring", expanded=False):
+            st.json(result.structured_extraction)
 
     if st.button("Generate explanation"):
         explanation = generate_candidate_explanation(result, st.session_state["jd_text"], result.cleaned_resume_text, use_llm=True)

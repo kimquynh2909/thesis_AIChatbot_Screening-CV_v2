@@ -277,6 +277,7 @@ All source files are implemented under `src/`. Important entry points:
 - `app.py`: Streamlit web application.
 - `src/services/matching_service.py`: model selection, ranking, hybrid score integration.
 - `src/models/`: baseline, semantic, optional API embedding, and hybrid models.
+- `src/llm/structured_extraction.py`: JSON-only JD/CV extraction for required skills, preferred skills, tools, education, experience, projects, and JD requirement evidence.
 - `src/llm/`: Gemini/LangChain explanations and deterministic fallback.
 - `src/data/prepare_pairs.py`: relevance pair creation.
 - `src/evaluation/benchmark.py`: model comparison pipeline.
@@ -294,9 +295,18 @@ streamlit run app.py
 Main pages:
 
 - Home: purpose, responsible-use note, workflow.
-- Screening: upload JD/resumes, select model, configure weights, rank candidates, explain details, chat, export.
+- Screening: upload JD/resumes, extract structured JSON, select model, configure weights, rank candidates, explain details, chat, export.
 - Evaluation: run ranking metrics on prepared test pairs.
 - Dataset & Thesis: dataset setup notes.
+
+The Screening page includes a **Structured JSON Extraction** panel. With `GOOGLE_API_KEY` or `GEMINI_API_KEY` configured, it uses Gemini to return JSON only:
+
+- JD: `required_skills`, `preferred_skills`, `tools`, `education`, `experience`
+- CV: `skills`, `education`, `experience`, `projects`, `jd_requirements`
+
+If no API key is configured, the app returns the same schema with deterministic dictionary/regex extraction so downstream calculation code can still run.
+
+Hybrid scoring uses this structured JSON by default for skill match, experience match, and education/certification match. The selected matching model still provides the semantic similarity score; the text-based deterministic skill extractor is now only a fallback when structured scoring is disabled or no candidate extraction is available.
 
 ## 9. Evaluation Pipeline
 

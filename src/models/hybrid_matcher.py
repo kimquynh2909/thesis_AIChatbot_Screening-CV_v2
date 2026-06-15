@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import Any
 
 from config.settings import DEFAULT_HYBRID_WEIGHTS
 from src.preprocessing.skill_extractor import SkillAnalysis, SkillExtractor
@@ -65,6 +66,44 @@ class HybridMatcher:
             certification_signals=cert_signals,
         )
 
+    def explainable_score_from_extraction(
+        self,
+        semantic_score: float,
+        jd_extraction: dict[str, Any],
+        resume_extraction: dict[str, Any],
+    ) -> HybridScoreBreakdown:
+        skill_analysis = skill_analysis_from_extraction(jd_extraction, resume_extraction)
+        required_years = extract_required_years_from_extraction(jd_extraction)
+        resume_years = extract_resume_years_from_extraction(resume_extraction)
+        exp_score = experience_match_score(resume_years, required_years)
+        edu_score, edu_signals, cert_signals = education_certification_score_from_extraction(
+            resume_extraction,
+            jd_extraction,
+        )
+
+        semantic = clamp01(semantic_score)
+        final = (
+            self.weights["semantic"] * semantic
+            + self.weights["skills"] * skill_analysis.skill_score
+            + self.weights["experience"] * exp_score
+            + self.weights["education"] * edu_score
+        )
+        return HybridScoreBreakdown(
+            semantic_score=semantic,
+            skill_score=skill_analysis.skill_score,
+            experience_score=exp_score,
+            education_score=edu_score,
+            final_score=float(round(clamp01(final) * 100.0, 2)),
+            matched_skills=skill_analysis.matched_skills,
+            missing_skills=skill_analysis.missing_skills,
+            resume_skills=skill_analysis.resume_skills,
+            jd_skills=skill_analysis.jd_skills,
+            detected_resume_years=resume_years,
+            required_years=required_years,
+            education_signals=edu_signals,
+            certification_signals=cert_signals,
+        )
+
     @staticmethod
     def _normalize_weights(weights: dict[str, float]) -> dict[str, float]:
         expected = ["semantic", "skills", "experience", "education"]
@@ -85,6 +124,14 @@ def extract_required_years(jd_text: str) -> float:
 
 def extract_resume_years(resume_text: str) -> float:
     return _extract_max_years(resume_text)
+
+
+def extract_required_years_from_extraction(jd_extraction: dict[str, Any]) -> float:
+    return _extract_max_years(" ".join(_string_list(jd_extraction.get("experience", []))))
+
+
+def extract_resume_years_from_extraction(resume_extraction: dict[str, Any]) -> float:
+    return _extract_max_years(" ".join(_string_list(resume_extraction.get("experience", []))))
 
 
 def _extract_max_years(text: str) -> float:
@@ -122,6 +169,107 @@ def education_certification_score(resume_text: str, jd_text: str) -> tuple[float
     matched = len(set(required_signals).intersection(resume_education + resume_certs))
     score = matched / len(set(required_signals))
     return clamp01(score), resume_education, resume_certs
+
+
+def skill_analysis_from_extraction(jd_extraction: dict[str, Any], resume_extraction: dict[str, Any]) -> SkillAnalysis:
+    required_skills = _unique_normalized(
+        _string_list(jd_extraction.get("required_skills", [])) + _string_list(jd_extraction.get("tools", []))
+    )
+    resume_skills = _unique_normalized(_string_list(resume_extraction.get("skills", [])))
+    matched_from_requirements = _matched_requirements_from_extraction(resume_extraction, required_skills)
+
+    matched = sorted(set(required_skills).intersection(resume_skills).union(matched_from_requirements))
+    missing = sorted(set(required_skills).difference(matched))
+    score = len(matched) / len(required_skills) if required_skills else 0.0
+    return SkillAnalysis(
+        jd_skills=required_skills,
+        resume_skills=resume_skills,
+        matched_skills=matched,
+        missing_skills=missing,
+        skill_score=float(score),
+    )
+
+
+def education_certification_score_from_extraction(
+    resume_extraction: dict[str, Any],
+    jd_extraction: dict[str, Any],
+) -> tuple[float, list[str], list[str]]:
+    jd_education = _string_list(jd_extraction.get("education", []))
+    resume_education = _string_list(resume_extraction.get("education", []))
+    certification_signals = [
+        item for item in resume_education if any(keyword in clean_for_matching(item) for keyword in CERTIFICATION_KEYWORDS)
+    ]
+
+    if not jd_education:
+        observed = bool(resume_education)
+        return (1.0 if observed else 0.5), resume_education, certification_signals
+
+    matched = sum(1 for requirement in jd_education if any(_texts_match(requirement, evidence) for evidence in resume_education))
+    return clamp01(matched / len(jd_education)), resume_education, certification_signals
+
+
+def _matched_requirements_from_extraction(resume_extraction: dict[str, Any], required_skills: list[str]) -> set[str]:
+    matched: set[str] = set()
+    requirements = resume_extraction.get("jd_requirements", [])
+    if not isinstance(requirements, list):
+        return matched
+    for item in requirements:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("status", "")).lower() != "matched":
+            continue
+        requirement = _normalize_term(str(item.get("requirement", "")))
+        for required_skill in required_skills:
+            if _texts_match(required_skill, requirement):
+                matched.add(required_skill)
+    return matched
+
+
+def _string_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        output: list[str] = []
+        for item in value:
+            if isinstance(item, dict):
+                text = item.get("name") or item.get("requirement") or item.get("text") or item.get("value")
+                if text:
+                    output.append(str(text))
+            else:
+                output.append(str(item))
+        return output
+    return [str(value)]
+
+
+def _unique_normalized(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    output: list[str] = []
+    for value in values:
+        normalized = _normalize_term(value)
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            output.append(normalized)
+    return output
+
+
+def _normalize_term(value: str) -> str:
+    return re.sub(r"\s+", " ", clean_for_matching(value)).strip()
+
+
+def _texts_match(left: str, right: str) -> bool:
+    left_norm = _normalize_term(left)
+    right_norm = _normalize_term(right)
+    if not left_norm or not right_norm:
+        return False
+    if left_norm in right_norm or right_norm in left_norm:
+        return True
+    left_tokens = set(re.findall(r"[a-zA-Z0-9+#.]+", left_norm))
+    right_tokens = set(re.findall(r"[a-zA-Z0-9+#.]+", right_norm))
+    if not left_tokens or not right_tokens:
+        return False
+    return len(left_tokens.intersection(right_tokens)) / len(left_tokens) >= 0.6
 
 
 def recommendation_label(final_score: float) -> str:

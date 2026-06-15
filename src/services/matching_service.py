@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import time
 from dataclasses import asdict, dataclass, replace
+from typing import Any
 
+from src.llm.structured_extraction import extract_screening_json
 from src.models.bge_matcher import BGEMatcher
 from src.models.bm25_matcher import BM25Matcher
 from src.models.e5_matcher import E5Matcher
@@ -45,11 +47,13 @@ class MatchResult:
     runtime_seconds: float
     cleaned_resume_text: str
     breakdown: HybridScoreBreakdown
+    structured_extraction: dict[str, Any] | None = None
 
     def to_export_dict(self) -> dict[str, object]:
         data = asdict(self)
         data.pop("cleaned_resume_text", None)
         data.pop("breakdown", None)
+        data.pop("structured_extraction", None)
         for key in ["matched_skills", "missing_skills", "resume_skills", "jd_skills", "education_signals", "certification_signals"]:
             data[key] = ", ".join(data[key])
         return data
@@ -83,6 +87,9 @@ def match_resumes(
     weights: dict[str, float] | None = None,
     use_hybrid_score: bool = True,
     skill_extractor: SkillExtractor | None = None,
+    use_structured_extraction_score: bool = True,
+    use_llm_extraction: bool = True,
+    structured_extraction: dict[str, Any] | None = None,
 ) -> list[MatchResult]:
     if not jd_text or not jd_text.strip():
         raise ValueError("A job description is required before matching resumes.")
@@ -98,10 +105,25 @@ def match_resumes(
     semantic_scores = matcher.score(cleaned_jd, cleaned_resumes)
     total_runtime = time.perf_counter() - started
     per_resume_runtime = total_runtime / max(len(resumes), 1)
+    extraction_payload = _resolve_extraction_payload(
+        jd_text=jd_text,
+        resumes=resumes,
+        use_hybrid_score=use_hybrid_score,
+        use_structured_extraction_score=use_structured_extraction_score,
+        use_llm_extraction=use_llm_extraction,
+        structured_extraction=structured_extraction,
+        skill_extractor=skill_extractor,
+    )
+    jd_extraction = extraction_payload.get("job_description", {}) if extraction_payload else {}
+    resume_extractions = _resume_extractions_by_identity(extraction_payload)
 
     results: list[MatchResult] = []
     for resume, resume_text, semantic_score in zip(resumes, cleaned_resumes, semantic_scores, strict=False):
-        breakdown = hybrid.explainable_score(semantic_score, resume_text, cleaned_jd)
+        resume_extraction = resume_extractions.get(resume.candidate_id) or resume_extractions.get(resume.filename)
+        if use_hybrid_score and use_structured_extraction_score and resume_extraction:
+            breakdown = hybrid.explainable_score_from_extraction(semantic_score, jd_extraction, resume_extraction)
+        else:
+            breakdown = hybrid.explainable_score(semantic_score, resume_text, cleaned_jd)
         final_score = breakdown.final_score if use_hybrid_score else round(float(semantic_score) * 100.0, 2)
         results.append(
             MatchResult(
@@ -124,8 +146,58 @@ def match_resumes(
                 runtime_seconds=round(per_resume_runtime, 4),
                 cleaned_resume_text=clean_for_display(resume.text),
                 breakdown=breakdown,
+                structured_extraction=resume_extraction,
             )
         )
 
     ranked = sorted(results, key=lambda item: item.final_score, reverse=True)
     return [replace(result, rank=idx + 1) for idx, result in enumerate(ranked)]
+
+
+def _resolve_extraction_payload(
+    jd_text: str,
+    resumes: list[ResumeDocument],
+    use_hybrid_score: bool,
+    use_structured_extraction_score: bool,
+    use_llm_extraction: bool,
+    structured_extraction: dict[str, Any] | None,
+    skill_extractor: SkillExtractor | None,
+) -> dict[str, Any]:
+    if not use_hybrid_score or not use_structured_extraction_score:
+        return {}
+    if structured_extraction:
+        return structured_extraction
+    return extract_screening_json(
+        jd_text=jd_text,
+        resumes=resumes,
+        use_llm=use_llm_extraction,
+        skill_extractor=skill_extractor,
+    )
+
+
+def _resume_extractions_by_identity(extraction_payload: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    if not extraction_payload:
+        return {}
+    rows = extraction_payload.get("resumes", [])
+    if isinstance(rows, dict):
+        indexed: dict[str, dict[str, Any]] = {}
+        for key, value in rows.items():
+            if not isinstance(value, dict):
+                continue
+            extraction = value.get("extraction", value)
+            if isinstance(extraction, dict):
+                indexed[str(key)] = extraction
+        return indexed
+    if not isinstance(rows, list):
+        return {}
+    indexed: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        extraction = row.get("extraction")
+        if not isinstance(extraction, dict):
+            continue
+        for key in [row.get("candidate_id"), row.get("filename")]:
+            if key:
+                indexed[str(key)] = extraction
+    return indexed
