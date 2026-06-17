@@ -46,8 +46,8 @@ DEFAULT_EMBEDDING_MODELS = {
 }
 
 STATIC_EMBEDDING_PATHS = {
-    "word2vec": os.getenv("WORD2VEC_PATH") or None,
-    "glove": os.getenv("GLOVE_PATH") or None,
+    "word2vec": "data/embeddings/GoogleNews-vectors-negative300.bin",
+    "glove": os.getenv("GLOVE_PATH") or "data/embeddings/glove.6B.100d.txt",
 }
 
 DEFAULT_RAG_EMBEDDING_MODEL = os.getenv("RAG_EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODELS["e5"])

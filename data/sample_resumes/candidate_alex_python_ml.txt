@@ -1,8 +1,0 @@
-Alex Nguyen
-Machine Learning Engineer
-
-Summary: Machine learning engineer with 4 years of experience building NLP products and model evaluation pipelines.
-Skills: Python, SQL, scikit-learn, PyTorch, pandas, NumPy, natural language processing, LangChain, FastAPI, Docker, AWS, Tableau, data visualization.
-Experience: Built transformer-based text classification services and deployed REST API endpoints with Docker on AWS. Designed model monitoring dashboards and collaborated with product managers.
-Education: Bachelor in Computer Science.
-Certification: AWS Certified Cloud Practitioner.

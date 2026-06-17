@@ -13,8 +13,11 @@ ENV_PATH = PROJECT_ROOT / ".env"
 
 load_dotenv(dotenv_path=ENV_PATH, override=True)
 
-DATA_PATH = PROJECT_ROOT / "data" / "processed" / "resume_chunk_embeddings.pkl"
-COLLECTION_NAME = "resume_embeddings"
+# DATA_PATH = PROJECT_ROOT / "data" / "processed" / "resume_chunk_embeddings.pkl"
+# COLLECTION_NAME = "resume_embeddings"
+
+DATA_PATH = PROJECT_ROOT / "data" / "processed" / "job_description_chunk_embeddings.pkl"
+COLLECTION_NAME = "job_description_embeddings"
 
 QDRANT_URL = os.getenv("QDRANT_URL")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
@@ -36,21 +39,32 @@ client = QdrantClient(
 with open(DATA_PATH, "rb") as f:
     data = pickle.load(f)
 
+# texts = data["texts"]
+# categories = data["categories"]
+# embeddings = data["embeddings"]
+
+# resume_ids = data.get("resume_ids", [f"resume_{i}" for i in range(len(texts))])
+# chunk_ids = data.get("chunk_ids", [f"chunk_{i}" for i in range(len(texts))])
+# chunk_indexes = data.get("chunk_indexes", list(range(len(texts))))
+
+# print("Loaded data:")
+# print("texts:", len(texts))
+# print("categories:", len(categories))
+# print("embeddings:", embeddings.shape)
+# print("resume_ids:", len(resume_ids))
+# print("chunk_ids:", len(chunk_ids))
+# print("chunk_indexes:", len(chunk_indexes))
+
+
 texts = data["texts"]
-categories = data["categories"]
+job_ids = data["job_id"]
+chunk_ids = data["chunk_id"]
+chunk_indexes = data["chunk_index"]
+job_titles = data["job_title"]
+categories = data["category"]
+required_skills = data["required_skills"]
+job_descriptions = data["job_description"]
 embeddings = data["embeddings"]
-
-resume_ids = data.get("resume_ids", [f"resume_{i}" for i in range(len(texts))])
-chunk_ids = data.get("chunk_ids", [f"chunk_{i}" for i in range(len(texts))])
-chunk_indexes = data.get("chunk_indexes", list(range(len(texts))))
-
-print("Loaded data:")
-print("texts:", len(texts))
-print("categories:", len(categories))
-print("embeddings:", embeddings.shape)
-print("resume_ids:", len(resume_ids))
-print("chunk_ids:", len(chunk_ids))
-print("chunk_indexes:", len(chunk_indexes))
 
 # client = QdrantClient(url="http://localhost:6333")
 client = QdrantClient(
@@ -75,11 +89,14 @@ points = [
         id=i,
         vector=embeddings[i].tolist(),
         payload={
-            "resume_id": resume_ids[i],
-            "chunk_id": chunk_ids[i],
-            "chunk_index": chunk_indexes[i],
-            "category": categories[i],
-            "text": texts[i]
+            "job_id": str(job_ids[i]),
+            "chunk_id": str(chunk_ids[i]),
+            "chunk_index": int(chunk_indexes[i]),
+            "job_title": str(job_titles[i]),
+            "category": str(categories[i]),
+            "required_skills": str(required_skills[i]),
+            "job_description": str(job_descriptions[i]),
+            "text": str(texts[i]),
         }
     )
     for i in range(len(texts))

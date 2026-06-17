@@ -1,7 +1,0 @@
-Chris Le
-Data Analyst
-
-Summary: Data analyst with 2 years of experience in reporting and analytics.
-Skills: SQL, Python, Excel, Power BI, Tableau, data visualization, statistics, dashboard, KPI analysis.
-Experience: Created business intelligence reports and cleaned datasets with pandas. Supported quarterly planning with KPI dashboards.
-Education: Master of Data Science.

@@ -1,7 +1,0 @@
-Brianna Tran
-Frontend Developer
-
-Summary: Frontend developer with 5 years of experience building web applications.
-Skills: JavaScript, TypeScript, React, HTML, CSS, Redux, responsive design, stakeholder management.
-Experience: Built customer dashboards and reusable UI components. Worked in agile teams and mentored junior developers.
-Education: Bachelor in Information Technology.

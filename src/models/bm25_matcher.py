@@ -43,34 +43,53 @@ class SimpleBM25:
 
 @dataclass
 class BM25Matcher:
+    k1: float = 1.5
+    b: float = 0.75
     name: str = "BM25"
 
-    def score(self, jd_text: str, resume_texts: list[str]) -> list[float]:
-        if not resume_texts:
+    def score(self, resume_text: str, job_texts: list[str]) -> list[float]:
+        """
+        Score multiple job descriptions against one resume.
+
+        Input:
+        - resume_text: one candidate CV/resume
+        - job_texts: list of job descriptions
+
+        Output:
+        - normalized BM25 score for each job description
+        """
+        if not job_texts:
             return []
-        tokenized_resumes = [tokenize_words(text) for text in resume_texts]
-        query_tokens = tokenize_words(jd_text)
-        if not query_tokens or not any(tokenized_resumes):
-            return [0.0 for _ in resume_texts]
 
-        try:
-            from rank_bm25 import BM25Okapi
+        tokenized_jobs = [tokenize_words(text) for text in job_texts]
 
-            bm25 = BM25Okapi(tokenized_resumes)
-            raw_scores = bm25.get_scores(query_tokens)
-        except ImportError:
-            raw_scores = SimpleBM25(tokenized_resumes).get_scores(query_tokens)
+        # CV is the query
+        query_tokens = list(dict.fromkeys(tokenize_words(resume_text)))
 
-        return self._normalize(raw_scores)
+        if not query_tokens or not any(tokenized_jobs):
+            return [0.0 for _ in job_texts]
+
+        raw_scores = SimpleBM25(
+            tokenized_jobs,
+            k1=self.k1,
+            b=self.b
+        ).get_scores(query_tokens)
+
+        return self._normalize(raw_scores, query_length=len(query_tokens))
 
     @staticmethod
-    def _normalize(scores: list[float] | np.ndarray) -> list[float]:
+    def _normalize(scores: list[float] | np.ndarray, query_length: int = 1) -> list[float]:
         array = np.asarray(scores, dtype=float)
         if array.size == 0:
             return []
-        max_score = float(array.max())
-        min_score = float(array.min())
-        if math.isclose(max_score, min_score):
+
+        array = np.nan_to_num(array, nan=0.0, posinf=0.0, neginf=0.0)
+        array = np.maximum(array, 0.0)
+
+        if math.isclose(float(array.max()), 0.0):
             return [0.0 for _ in array]
-        normalized = (array - min_score) / (max_score - min_score)
+
+        scale = max(float(query_length), 1.0)
+        normalized = 1.0 - np.exp(-array / scale)
+
         return np.clip(normalized, 0.0, 1.0).astype(float).tolist()

@@ -7,6 +7,7 @@ from pathlib import Path
 import pandas as pd
 
 from config.settings import EVALUATION_OUTPUT_DIR, PROCESSED_DATA_DIR
+from src.evaluation.label_utils import convert_label_to_binary, find_label_column
 from src.evaluation.ranking_metrics import aggregate_metric_table, evaluate_ranked_groups
 from src.services.matching_service import ResumeDocument, get_matcher
 
@@ -50,6 +51,9 @@ def run_benchmark(
         scored_pairs, avg_runtime = score_pairs_for_model(pairs, model_key, limit_jobs=limit_jobs)
         scored_path = output_dir / f"scored_pairs_{model_key}.csv"
         scored_pairs.to_csv(scored_path, index=False)
+        if "relevance" not in scored_pairs.columns:
+            label_column = find_label_column(scored_pairs)
+            scored_pairs["relevance"] = scored_pairs[label_column].map(convert_label_to_binary)
         group_metrics = evaluate_ranked_groups(scored_pairs)
         metrics_path = output_dir / f"group_metrics_{model_key}.csv"
         group_metrics.to_csv(metrics_path, index=False)
