@@ -5,15 +5,7 @@ from dataclasses import asdict, dataclass, replace
 from typing import Any
 
 from src.llm.structured_extraction import extract_screening_json
-from src.models.bge_matcher import BGEMatcher
-from src.models.bm25_matcher import BM25Matcher
-from src.models.e5_matcher import E5Matcher
-from src.models.glove_matcher import GloveMatcher
-from src.models.google_embedding_matcher import GoogleEmbeddingMatcher
 from src.models.hybrid_matcher import HybridMatcher, HybridScoreBreakdown, recommendation_label
-from src.models.sbert_matcher import SBERTMatcher
-from src.models.tfidf_matcher import TfidfMatcher
-from src.models.word2vec_matcher import Word2VecMatcher
 from src.preprocessing.skill_extractor import SkillExtractor
 from src.preprocessing.text_cleaner import clean_for_display, clean_for_matching
 from src.utils.constants import MODEL_BGE, MODEL_BM25, MODEL_E5, MODEL_GLOVE, MODEL_GOOGLE, MODEL_SBERT, MODEL_TFIDF, MODEL_WORD2VEC
@@ -62,20 +54,36 @@ class MatchResult:
 def get_matcher(model_key: str):
     model_key = model_key.lower()
     if model_key == MODEL_TFIDF:
+        from src.models.tfidf_matcher import TfidfMatcher
+
         return TfidfMatcher()
     if model_key == MODEL_BM25:
+        from src.models.bm25_matcher import BM25Matcher
+
         return BM25Matcher()
     if model_key == MODEL_WORD2VEC:
+        from src.models.word2vec_matcher import Word2VecMatcher
+
         return Word2VecMatcher()
     if model_key == MODEL_GLOVE:
+        from src.models.glove_matcher import GloveMatcher
+
         return GloveMatcher()
     if model_key == MODEL_SBERT:
+        from src.models.sbert_matcher import SBERTMatcher
+
         return SBERTMatcher()
     if model_key == MODEL_E5:
+        from src.models.e5_matcher import E5Matcher
+
         return E5Matcher()
     if model_key == MODEL_BGE:
+        from src.models.bge_matcher import BGEMatcher
+
         return BGEMatcher()
     if model_key == MODEL_GOOGLE:
+        from src.models.google_embedding_matcher import GoogleEmbeddingMatcher
+
         return GoogleEmbeddingMatcher()
     raise ValueError(f"Unknown matching model: {model_key}")
 

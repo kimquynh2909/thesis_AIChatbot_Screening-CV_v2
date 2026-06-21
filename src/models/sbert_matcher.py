@@ -1,40 +1,73 @@
-import pandas as pd
+from __future__ import annotations
+
+from dataclasses import dataclass
+from functools import lru_cache
+
 import numpy as np
-from sentence_transformers import SentenceTransformer, util
 
-resume_path = "data/processed/train_resumes.xlsx"
+from config.settings import DEFAULT_EMBEDDING_MODELS
+from src.preprocessing.text_cleaner import clean_for_matching
 
-jd_text = """
-We are looking for a Data Scientist with experience in Python, SQL,
-machine learning, data preprocessing, model evaluation, statistics,
-and communication skills.
-"""
 
-df = pd.read_excel(resume_path)
+@lru_cache(maxsize=2)
+def load_sbert_model(model_name: str):
+    try:
+        from sentence_transformers import SentenceTransformer
+    except ImportError as exc:
+        raise ImportError(
+            "sentence-transformers is required for SBERT. "
+            "Install dependencies with: pip install -r requirements.txt"
+        ) from exc
+    return SentenceTransformer(model_name)
 
-model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
-jd_embedding = model.encode(
-    jd_text,
-    convert_to_tensor=True,
-    normalize_embeddings=True,
-)
+@dataclass
+class SBERTMatcher:
+    model_name: str = DEFAULT_EMBEDDING_MODELS["sbert"]
+    name: str = "SBERT"
+    normalize_embeddings: bool = True
 
-resume_embeddings = model.encode(
-    df["text"].fillna("").astype(str).tolist(),
-    convert_to_tensor=True,
-    normalize_embeddings=True,
-    show_progress_bar=True,
-)
+    def score(self, jd_text: str, resume_texts: list[str]) -> list[float]:
+        """
+        Score one job description against multiple resumes.
 
-scores = util.cos_sim(jd_embedding, resume_embeddings)[0].cpu().numpy()
+        Uses the same matching preprocessing as TF-IDF:
+        clean_for_matching(jd_text) and clean_for_matching(each resume).
+        """
+        if not resume_texts:
+            return []
 
-df["sbert_score"] = scores
-df["match_percentage"] = (np.clip(scores, 0, 1) * 100).round(2)
+        jd_clean = clean_for_matching(jd_text)
+        resume_clean = [clean_for_matching(text) for text in resume_texts]
 
-df = df.sort_values("sbert_score", ascending=False).reset_index(drop=True)
-df.insert(0, "rank", range(1, len(df) + 1))
+        if not jd_clean.strip():
+            return [0.0 for _ in resume_clean]
 
-print(df[["rank", "category", "sbert_score", "match_percentage"]].head(10))
+        non_empty_indexes = [
+            index for index, text in enumerate(resume_clean) if text.strip()
+        ]
+        if not non_empty_indexes:
+            return [0.0 for _ in resume_clean]
 
-df.to_excel("outputs/sbert_result.xlsx", index=False)
+        model = load_sbert_model(self.model_name)
+        jd_embedding = self._encode(model, [jd_clean])[0]
+        resume_embeddings = self._encode(
+            model,
+            [resume_clean[index] for index in non_empty_indexes],
+        )
+
+        raw_scores = resume_embeddings @ jd_embedding
+        scores = [0.0 for _ in resume_clean]
+        for index, raw_score in zip(non_empty_indexes, raw_scores, strict=False):
+            scores[index] = float(np.clip(raw_score, 0.0, 1.0))
+
+        return scores
+
+    def _encode(self, model, texts: list[str]) -> np.ndarray:
+        embeddings = model.encode(
+            texts,
+            convert_to_numpy=True,
+            normalize_embeddings=self.normalize_embeddings,
+            show_progress_bar=False,
+        )
+        return np.asarray(embeddings, dtype=float)
