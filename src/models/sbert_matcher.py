@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 
 import numpy as np
+from sentence_transformers import util
 
 from config.settings import DEFAULT_EMBEDDING_MODELS
 from src.preprocessing.text_cleaner import clean_for_matching
@@ -56,7 +57,7 @@ class SBERTMatcher:
             [resume_clean[index] for index in non_empty_indexes],
         )
 
-        raw_scores = resume_embeddings @ jd_embedding
+        raw_scores = util.cos_sim(jd_embedding, resume_embeddings)[0].tolist()
         scores = [0.0 for _ in resume_clean]
         for index, raw_score in zip(non_empty_indexes, raw_scores, strict=False):
             scores[index] = float(np.clip(raw_score, 0.0, 1.0))
