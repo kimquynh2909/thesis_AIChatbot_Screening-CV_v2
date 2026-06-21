@@ -184,19 +184,14 @@ ai_resume_screening/
 ├── data/
 │   ├── raw/
 │   ├── processed/
-│   ├── sample_resumes/
-│   └── sample_job_descriptions/
+│   ├── embeddings/
 ├── notebooks/
-│   ├── 01_dataset_exploration.ipynb
-│   ├── 02_preprocessing.ipynb
-│   ├── 03_baseline_models.ipynb
-│   ├── 04_embedding_models.ipynb
-│   └── 05_evaluation.ipynb
+│   ├── Thesis_AI_resume.ipynb
 ├── scripts/
 │   ├── create_sample_data.py
 │   ├── download_datasets.py
-|   ├── create_sample_data.py
-│   └── download_datasets.py
+|   ├── import_embeddings_to_qdrant.py
+│   └── index_qdrant.py
 ├── src/
 │   ├── data/
 │   │   ├── dataset_loader.py
@@ -224,7 +219,8 @@ ai_resume_screening/
 │   │   └── visualization.py
 │   ├── llm/
 │   │   ├── explanation_chain.py
-│   │   └── chatbot_chain.py
+│   │   ├── chatbot_chain.py
+│   │   └── structured_extraction.py
 │   ├── services/
 │   │   ├── matching_service.py
 │   │   ├── ranking_service.py
