@@ -1,58 +1,74 @@
-.venv/
-__pycache__/
-*.pyc
-.env
-.streamlit/secrets.toml
-data/raw/*
-!data/raw/.gitkeep
-data/processed/*
-!data/processed/.gitkeep
-!data/processed/test_pairs.csv
-outputs/evaluation_results/*
-!outputs/evaluation_results/.gitkeep
-outputs/charts/*
-!outputs/charts/.gitkeep
-outputs/exported_reports/*
-!outputs/exported_reports/.gitkeep
-*.zip
-*.tar.gz
-*.parquet
-
-
 # Python
 __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.coverage
+.coverage.*
+htmlcov/
 
-# Virtual environment
+# Virtual environments
 .venv/
 venv/
 env/
+ENV/
 
-# Environment variables
+# Environment variables and local secrets
 .env
+.env.*
+!.env.example
+.streamlit/
+!.streamlit/config.toml
 
-# Streamlit
-.streamlit/secrets.toml
+# Jupyter
+.ipynb_checkpoints/
 
-# Data
-data/raw/
-data/processed/
+# Local data and generated datasets
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+!data/processed/test_pairs.csv
+data/embeddings/*
+!data/embeddings/.gitkeep
 data/*.csv
 data/*.xlsx
 data/*.json
 data/*.embeddings
+
+# Large exports and archives
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
+*.parquet
+*.feather
 *.csv
 *.xlsx
-*.zip
 
-# Outputs
-outputs/
+# App outputs, logs, and reports
+outputs/*
+!outputs/.gitkeep
+!outputs/evaluation_results/
+outputs/evaluation_results/*
+!outputs/evaluation_results/.gitkeep
+!outputs/charts/
+outputs/charts/*
+!outputs/charts/.gitkeep
+!outputs/exported_reports/
+outputs/exported_reports/*
+!outputs/exported_reports/.gitkeep
 runs/
 logs/
+*.log
 
-# ML / embedding / model files
+# ML, embedding, and model artifacts
 *.pkl
 *.pickle
 *.pt
@@ -61,9 +77,14 @@ logs/
 *.safetensors
 *.onnx
 *.joblib
+*.npy
+*.npz
+*.faiss
+*.index
 
 # Vector DB local storage
 qdrant_local/
+qdrant_storage/
 storage/
 *.sqlite
 *.db
@@ -71,5 +92,6 @@ storage/
 # OS / IDE
 .DS_Store
 Thumbs.db
+desktop.ini
 .vscode/
 .idea/
