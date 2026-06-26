@@ -16,6 +16,23 @@ def results_to_csv_bytes(results: list[MatchResult]) -> bytes:
     return dataframe.to_csv(index=False).encode("utf-8")
 
 
+def job_results_to_dataframe(results: list[MatchResult]) -> pd.DataFrame:
+    dataframe = results_to_dataframe(results)
+    return dataframe.rename(
+        columns={
+            "candidate_id": "job_id",
+            "filename": "job_description_file",
+            "detected_resume_years": "resume_years",
+            "required_years": "job_required_years",
+        }
+    )
+
+
+def job_results_to_csv_bytes(results: list[MatchResult]) -> bytes:
+    dataframe = job_results_to_dataframe(results)
+    return dataframe.to_csv(index=False).encode("utf-8")
+
+
 def screening_report_markdown(jd_text: str, results: list[MatchResult]) -> str:
     output = StringIO()
     output.write("# HR Screening Summary\n\n")
@@ -34,4 +51,25 @@ def screening_report_markdown(jd_text: str, results: list[MatchResult]) -> str:
         output.write(f"- Missing skills: {', '.join(result.missing_skills) or 'None detected'}\n")
         output.write(f"- Detected experience years: {result.detected_resume_years:g}\n")
         output.write(f"- Required experience years: {result.required_years:g}\n\n")
+    return output.getvalue()
+
+
+def job_matching_report_markdown(resume_text: str, results: list[MatchResult]) -> str:
+    output = StringIO()
+    output.write("# Job Matching Summary\n\n")
+    output.write("This report recommends job descriptions that best match the uploaded CV/resume evidence.\n\n")
+    output.write("## Resume Preview\n\n")
+    output.write(resume_text[:1500].strip())
+    if len(resume_text) > 1500:
+        output.write("...")
+    output.write("\n\n## Ranked Job Descriptions\n\n")
+    for result in results:
+        output.write(f"### #{result.rank} {result.filename}\n\n")
+        output.write(f"- Final score: {result.final_score:.2f}%\n")
+        output.write(f"- Semantic score: {result.semantic_score:.2f}%\n")
+        output.write(f"- Match label: {result.recommendation}\n")
+        output.write(f"- Matched skills: {', '.join(result.matched_skills) or 'None detected'}\n")
+        output.write(f"- Missing job-required skills: {', '.join(result.missing_skills) or 'None detected'}\n")
+        output.write(f"- Resume experience years: {result.detected_resume_years:g}\n")
+        output.write(f"- Job required experience years: {result.required_years:g}\n\n")
     return output.getvalue()

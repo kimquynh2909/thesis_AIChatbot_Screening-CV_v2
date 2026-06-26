@@ -298,7 +298,7 @@ Main pages:
 The Screening page includes a **Structured JSON Extraction** panel. With `GOOGLE_API_KEY` or `GEMINI_API_KEY` configured, it uses Gemini to return JSON only:
 
 - JD: `required_skills`, `preferred_skills`, `tools`, `education`, `experience`
-- CV: `skills`, `education`, `experience`, `projects`, `jd_requirements`
+- CV: `skills`, `education`, `experience`, `projects`
 
 If no API key is configured, the app returns the same schema with deterministic dictionary/regex extraction so downstream calculation code can still run.
 

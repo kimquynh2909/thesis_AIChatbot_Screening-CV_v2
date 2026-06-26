@@ -14,7 +14,7 @@ from src.utils.file_utils import shorten_text
 
 
 JD_EXTRACTION_KEYS = ["required_skills", "preferred_skills", "tools", "education", "experience"]
-CV_EXTRACTION_KEYS = ["skills", "education", "experience", "projects", "jd_requirements"]
+CV_EXTRACTION_KEYS = ["skills", "education", "experience", "projects"]
 
 JD_EXTRACTION_PROMPT = """You are an information extraction engine for an HR screening system.
 Use only the job description text. Do not infer protected attributes.
@@ -42,14 +42,7 @@ Return exactly this JSON object shape:
   "skills": ["skills explicitly evidenced by the CV"],
   "education": ["degrees, majors, certifications, or education evidence in the CV"],
   "experience": ["role, years, domain, and responsibility evidence in the CV"],
-  "projects": ["project names or project evidence in the CV"],
-  "jd_requirements": [
-    {
-      "requirement": "one JD requirement being checked",
-      "status": "matched | missing | unclear",
-      "evidence": "short CV evidence, or empty string when missing"
-    }
-  ]
+  "projects": ["project names or project evidence in the CV"]
 }
 
 Job description extraction JSON:
@@ -120,15 +113,12 @@ def normalize_jd_extraction(data: dict[str, Any]) -> dict[str, list[str]]:
 
 
 def normalize_cv_extraction(data: dict[str, Any], jd_extraction: dict[str, Any] | None = None) -> dict[str, Any]:
-    normalized: dict[str, Any] = {
+    return {
         "skills": _unique_strings(data.get("skills", [])),
         "education": _unique_strings(data.get("education", [])),
         "experience": _unique_strings(data.get("experience", [])),
         "projects": _unique_strings(data.get("projects", [])),
     }
-    requirements = data.get("jd_requirements", [])
-    normalized["jd_requirements"] = _normalize_requirement_matches(requirements, jd_extraction or {})
-    return normalized
 
 
 def parse_json_object(text: str) -> dict[str, Any]:
@@ -175,13 +165,11 @@ def deterministic_cv_extraction(
     education = _education_signals(resume_text)
     experience = _experience_signals(resume_text, extract_resume_years(resume_text))
     projects = _project_signals(resume_text)
-    requirements = _match_jd_requirements(resume_text, jd_extraction)
     return {
         "skills": skills,
         "education": education,
         "experience": experience,
         "projects": projects,
-        "jd_requirements": requirements,
     }
 
 
@@ -232,27 +220,6 @@ def _unique_strings(value: Any) -> list[str]:
             seen.add(key)
             result.append(cleaned)
     return result
-
-
-def _normalize_requirement_matches(value: Any, jd_extraction: dict[str, Any]) -> list[dict[str, str]]:
-    if not isinstance(value, list):
-        value = _all_jd_requirement_strings(jd_extraction)
-    normalized: list[dict[str, str]] = []
-    for item in value:
-        if isinstance(item, dict):
-            requirement = str(item.get("requirement", "")).strip()
-            status = str(item.get("status", "unclear")).strip().lower()
-            evidence = str(item.get("evidence", "")).strip()
-        else:
-            requirement = str(item).strip()
-            status = "unclear"
-            evidence = ""
-        if not requirement:
-            continue
-        if status not in {"matched", "missing", "unclear"}:
-            status = "unclear"
-        normalized.append({"requirement": requirement, "status": status, "evidence": evidence})
-    return normalized
 
 
 def _extract_preferred_terms(text: str, extractor: SkillExtractor) -> list[str]:
@@ -326,32 +293,3 @@ def _project_signals(text: str) -> list[str]:
                 signals.append(cleaned)
     return _unique_strings(signals)
 
-
-def _match_jd_requirements(resume_text: str, jd_extraction: dict[str, Any]) -> list[dict[str, str]]:
-    resume_clean = clean_for_matching(resume_text)
-    resume_years = extract_resume_years(resume_text)
-    requirements = _all_jd_requirement_strings(jd_extraction)
-    matches: list[dict[str, str]] = []
-    for requirement in requirements:
-        requirement_clean = clean_for_matching(requirement)
-        status = "matched" if requirement_clean and requirement_clean in resume_clean else "missing"
-        evidence = requirement if status == "matched" else ""
-        if status == "missing" and "year" in requirement_clean:
-            required_years = _first_number(requirement_clean)
-            if required_years is not None and resume_years >= required_years:
-                status = "matched"
-                evidence = f"{resume_years:g} years"
-        matches.append({"requirement": requirement, "status": status, "evidence": evidence})
-    return matches
-
-
-def _all_jd_requirement_strings(jd_extraction: dict[str, Any]) -> list[str]:
-    requirements: list[str] = []
-    for key in JD_EXTRACTION_KEYS:
-        requirements.extend(_unique_strings(jd_extraction.get(key, [])))
-    return _unique_strings(requirements)
-
-
-def _first_number(text: str) -> float | None:
-    match = re.search(r"\d+(?:\.\d+)?", text)
-    return float(match.group(0)) if match else None

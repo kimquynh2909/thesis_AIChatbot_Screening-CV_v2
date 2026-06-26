@@ -86,9 +86,6 @@ def test_matching_service_uses_structured_json_for_hybrid_score() -> None:
                     "education": [],
                     "experience": [],
                     "projects": [],
-                    "jd_requirements": [
-                        {"requirement": "Kubernetes", "status": "matched", "evidence": "LLM extracted Kubernetes evidence"}
-                    ],
                 },
             }
         ],

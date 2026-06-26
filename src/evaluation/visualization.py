@@ -8,19 +8,27 @@ from src.services.matching_service import MatchResult
 
 
 def candidate_score_bar(results: list[MatchResult]) -> go.Figure:
+    return matching_score_bar(results, item_label="Candidate", title="Candidate Matching Scores")
+
+
+def job_score_bar(results: list[MatchResult]) -> go.Figure:
+    return matching_score_bar(results, item_label="Job Description", title="Job Matching Scores")
+
+
+def matching_score_bar(results: list[MatchResult], item_label: str, title: str) -> go.Figure:
     frame = pd.DataFrame(
         {
-            "Candidate": [result.filename for result in results],
+            item_label: [result.filename for result in results],
             "Final Score": [result.final_score for result in results],
             "Semantic Score": [result.semantic_score for result in results],
         }
     )
     fig = px.bar(
         frame,
-        x="Candidate",
+        x=item_label,
         y=["Final Score", "Semantic Score"],
         barmode="group",
-        title="Candidate Matching Scores",
+        title=title,
     )
     fig.update_layout(xaxis_tickangle=-30, yaxis_range=[0, 100], legend_title_text="Score Type")
     return fig

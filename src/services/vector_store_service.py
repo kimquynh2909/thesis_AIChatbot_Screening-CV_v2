@@ -19,7 +19,7 @@ from src.preprocessing.text_cleaner import clean_for_matching
 from src.utils.file_utils import shorten_text
 
 if TYPE_CHECKING:
-    from src.services.matching_service import ResumeDocument
+    from src.services.matching_service import JobDescriptionDocument, ResumeDocument
 
 
 @dataclass(frozen=True)
@@ -253,6 +253,35 @@ def build_rag_documents(jd_text: str, resumes: list[ResumeDocument]) -> list[RAG
                 filename=resume.filename,
                 text=resume.text,
                 metadata={"candidate_id": resume.candidate_id},
+            )
+        )
+    return documents
+
+
+def build_job_matching_rag_documents(
+    resume: ResumeDocument,
+    job_descriptions: list[JobDescriptionDocument],
+) -> list[RAGDocument]:
+    documents: list[RAGDocument] = []
+    if resume.text and resume.text.strip():
+        documents.append(
+            RAGDocument(
+                document_id=resume.candidate_id,
+                document_type="resume",
+                filename=resume.filename,
+                text=resume.text,
+                metadata={"candidate_id": resume.candidate_id},
+            )
+        )
+
+    for job in job_descriptions:
+        documents.append(
+            RAGDocument(
+                document_id=job.job_id,
+                document_type="job_description",
+                filename=job.filename,
+                text=job.text,
+                metadata={"job_id": job.job_id},
             )
         )
     return documents

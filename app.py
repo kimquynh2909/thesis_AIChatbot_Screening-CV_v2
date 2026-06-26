@@ -23,21 +23,21 @@ from config.settings import (
     SAMPLE_RESUME_DIR,
 )
 from src.evaluation.benchmark import run_benchmark
-from src.evaluation.visualization import candidate_score_bar, model_comparison_chart
-from src.llm.chatbot_chain import answer_hr_question
+from src.evaluation.visualization import job_score_bar, model_comparison_chart
+from src.llm.chatbot_chain import answer_job_match_question
 from src.llm.explanation_chain import generate_candidate_explanation
-from src.llm.structured_extraction import extract_screening_json
+from src.llm.structured_extraction import extract_cv_json, extract_job_description_json
 from src.preprocessing.document_parser import DocumentParser
 from src.preprocessing.skill_extractor import SkillExtractor
-from src.services.export_service import results_to_csv_bytes, screening_report_markdown
-from src.services.matching_service import ResumeDocument, match_resumes
-from src.services.vector_store_service import QdrantRAGStore, build_rag_context, build_rag_documents
+from src.services.export_service import job_matching_report_markdown, job_results_to_csv_bytes, job_results_to_dataframe
+from src.services.matching_service import JobDescriptionDocument, ResumeDocument, match_jobs_to_resume
+from src.services.vector_store_service import QdrantRAGStore, build_job_matching_rag_documents, build_rag_context
 from src.utils.file_utils import shorten_text
 
 
 
 st.set_page_config(
-    page_title="AI Resume Screening Assistant",
+    page_title="AI Job Match Assistant",
     page_icon="",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -47,8 +47,11 @@ st.set_page_config(
 def init_state() -> None:
     defaults = {
         "results": [],
-        "jd_text": "",
-        "resume_docs": [],
+        "resume_text": "",
+        "resume_filename": "uploaded_resume.txt",
+        "job_docs": [],
+        "job_docs_signature": [],
+        "job_descriptions_text": "",
         "explanations": {},
         "chat_history": [],
         "rag_results": [],
@@ -64,16 +67,54 @@ def parse_uploaded_text(uploaded_file, parser: DocumentParser) -> str:
     return parsed.cleaned_text
 
 
-def load_sample_documents() -> tuple[str, list[ResumeDocument]]:
+def job_docs_signature(job_docs: list[JobDescriptionDocument]) -> list[tuple[str, str, int, str, str]]:
+    return [(job.job_id, job.filename, len(job.text), job.text[:120], job.text[-120:]) for job in job_docs]
+
+
+def load_sample_documents() -> tuple[str, str, list[JobDescriptionDocument]]:
     parser = DocumentParser()
-    jd_files = sorted(SAMPLE_JD_DIR.glob("*.txt"))
     resume_files = sorted(SAMPLE_RESUME_DIR.glob("*.txt"))
-    jd_text = parser.parse_path(jd_files[0]).cleaned_text if jd_files else ""
-    resumes = [
-        ResumeDocument(candidate_id=path.stem, filename=path.name, text=parser.parse_path(path).cleaned_text)
-        for path in resume_files
+    jd_files = sorted(SAMPLE_JD_DIR.glob("*.txt"))
+    if resume_files and jd_files:
+        resume_path = resume_files[0]
+        resume_text = parser.parse_path(resume_path).cleaned_text
+        jobs = [
+            JobDescriptionDocument(job_id=path.stem, filename=path.name, text=parser.parse_path(path).cleaned_text)
+            for path in jd_files
+        ]
+        return resume_path.name, resume_text, jobs
+
+    resume_text = """Machine learning engineer with 4 years of experience building NLP and analytics products.
+Skills: Python, SQL, PyTorch, scikit-learn, pandas, Docker, AWS, REST APIs, and model evaluation.
+Projects: Built a resume-job matching prototype with sentence embeddings, hybrid scoring, and explainable skill analysis.
+Education: Bachelor of Science in Computer Science."""
+    jobs = [
+        JobDescriptionDocument(
+            job_id="machine_learning_engineer",
+            filename="machine_learning_engineer.txt",
+            text=(
+                "Machine Learning Engineer required with Python, SQL, PyTorch, NLP, Docker, AWS, "
+                "model evaluation, API deployment, and 3 years of experience."
+            ),
+        ),
+        JobDescriptionDocument(
+            job_id="frontend_developer",
+            filename="frontend_developer.txt",
+            text=(
+                "Frontend Developer needed with React, TypeScript, CSS, design systems, browser testing, "
+                "and UI accessibility experience."
+            ),
+        ),
+        JobDescriptionDocument(
+            job_id="data_analyst",
+            filename="data_analyst.txt",
+            text=(
+                "Data Analyst role requiring SQL, Excel, dashboard reporting, stakeholder communication, "
+                "statistics, and business KPI analysis."
+            ),
+        ),
     ]
-    return jd_text, resumes
+    return "sample_resume.txt", resume_text, jobs
 
 
 # def display_extracted_keywords() -> None:
@@ -149,11 +190,11 @@ def load_sample_documents() -> tuple[str, list[ResumeDocument]]:
 
 def display_structured_extraction() -> None:
     st.markdown("### Structured JSON Extraction")
-    jd_text = st.session_state.get("jd_text", "")
-    resume_docs = st.session_state.get("resume_docs", [])
+    resume_text = st.session_state.get("resume_text", "")
+    job_docs = st.session_state.get("job_docs", [])
 
-    if not jd_text and not resume_docs:
-        st.info("Upload a job description and resumes to extract structured JSON.")
+    if not resume_text or not job_docs:
+        st.info("Upload a resume/CV and job descriptions to extract structured JSON.")
         return
 
     use_llm = st.toggle(
@@ -165,11 +206,31 @@ def display_structured_extraction() -> None:
     if st.button("Extract structured JSON"):
         try:
             with st.spinner("Extracting structured JSON..."):
-                st.session_state["structured_extraction"] = extract_screening_json(
-                    jd_text=jd_text,
-                    resumes=resume_docs,
-                    use_llm=use_llm,
-                )
+                extractor = SkillExtractor()
+                rows = []
+                for job in job_docs:
+                    jd_extraction = extract_job_description_json(job.text, use_llm=use_llm, skill_extractor=extractor)
+                    resume_extraction = extract_cv_json(
+                        resume_text,
+                        jd_extraction,
+                        use_llm=use_llm,
+                        skill_extractor=extractor,
+                    )
+                    rows.append(
+                        {
+                            "job_id": job.job_id,
+                            "filename": job.filename,
+                            "job_description": jd_extraction,
+                            "resume": resume_extraction,
+                        }
+                    )
+                st.session_state["structured_extraction"] = {
+                    "resume": {
+                        "candidate_id": "uploaded_resume",
+                        "filename": st.session_state.get("resume_filename", "uploaded_resume.txt"),
+                    },
+                    "job_descriptions": rows,
+                }
         except Exception as exc:
             st.error(str(exc))
 
@@ -199,13 +260,13 @@ def make_weight_controls() -> dict[str, float]:
 
 
 def home_page() -> None:
-    st.title("AI-Powered Resume Screening Assistant")
+    st.title("AI-Powered Job Match Assistant")
     st.write(
-        "This bachelor-thesis prototype ranks uploaded resumes against a job description using baseline IR models, "
-        "semantic embedding models, and an interpretable hybrid score."
+        "This bachelor-thesis prototype ranks multiple job descriptions against one uploaded resume/CV using "
+        "baseline IR models, semantic embedding models, and an interpretable hybrid score."
     )
     st.warning(
-        "The system supports HR screening. It does not make final hiring decisions and should be reviewed by a human recruiter."
+        "The system recommends likely job matches from document evidence. It does not make final employment decisions."
     )
 
     st.subheader("System Workflow")
@@ -213,11 +274,11 @@ def home_page() -> None:
         """
         ```mermaid
         flowchart LR
-            A["Resume/JD Upload"] --> B["Text Extraction"]
+            A["One Resume + Many Job Descriptions"] --> B["Text Extraction"]
             B --> C["Cleaning and Skill Extraction"]
             C --> D["Model Scoring"]
             D --> E["Hybrid Score"]
-            E --> F["Candidate Ranking"]
+            E --> F["Job Match Ranking"]
             C --> Q["Qdrant Vector Store"]
             Q --> R["RAG Retrieval Context"]
             F --> G["LLM Explanation"]
@@ -246,55 +307,87 @@ def home_page() -> None:
 
 
 def screening_page() -> None:
-    st.title("Resume Matching")
+    st.title("Job Match Recommendation")
+    st.write("Upload one resume/CV, compare it with multiple job descriptions, and rank the jobs by fit.")
     parser = DocumentParser()
 
     left, right = st.columns([1.05, 0.95], gap="large")
     with left:
-        st.subheader("Job Description")
-        jd_text = st.text_area("Paste job description", value=st.session_state.get("jd_text", ""), height=220)
-        jd_file = st.file_uploader("Upload JD file", type=["pdf", "docx", "txt"], key="jd_file")
-        if jd_file:
+        st.subheader("Resume/CV")
+        resume_text = st.text_area("Paste resume/CV", value=st.session_state.get("resume_text", ""), height=260)
+        resume_file = st.file_uploader("Upload resume/CV file", type=["pdf", "docx", "txt"], key="resume_file")
+        if resume_file:
             try:
-                jd_text = parse_uploaded_text(jd_file, parser)
-                st.success(f"Loaded {jd_file.name}")
+                resume_text = parse_uploaded_text(resume_file, parser)
+                st.session_state["resume_filename"] = resume_file.name
+                st.success(f"Loaded {resume_file.name}")
             except Exception as exc:
                 st.error(str(exc))
         if st.button("Load sample data"):
-            jd_text, sample_resumes = load_sample_documents()
-            st.session_state["resume_docs"] = sample_resumes
-            st.session_state["jd_text"] = jd_text
+            resume_filename, sample_resume_text, sample_jobs = load_sample_documents()
+            st.session_state["resume_filename"] = resume_filename
+            st.session_state["resume_text"] = sample_resume_text
+            st.session_state["job_docs"] = sample_jobs
+            st.session_state["job_docs_signature"] = job_docs_signature(sample_jobs)
+            st.session_state["job_descriptions_text"] = ""
+            st.session_state["structured_extraction"] = {}
+            st.session_state["results"] = []
             st.rerun()
-        st.session_state["jd_text"] = jd_text
+        if resume_text != st.session_state.get("resume_text", ""):
+            st.session_state["structured_extraction"] = {}
+            st.session_state["results"] = []
+        st.session_state["resume_text"] = resume_text
 
     with right:
-        st.subheader("Resumes")
-        uploaded_resumes = st.file_uploader(
-            "Upload resume files",
+        st.subheader("Job Descriptions")
+        pasted_jobs = st.text_area(
+            "Paste job descriptions",
+            value=st.session_state.get("job_descriptions_text", ""),
+            height=180,
+            help="Separate multiple pasted job descriptions with a line containing only ---.",
+        )
+        st.session_state["job_descriptions_text"] = pasted_jobs
+        uploaded_jobs = st.file_uploader(
+            "Upload job description files",
             type=["pdf", "docx", "txt"],
             accept_multiple_files=True,
-            key="resume_files",
+            key="job_description_files",
         )
-        if uploaded_resumes:
-            docs: list[ResumeDocument] = []
-            for idx, uploaded in enumerate(uploaded_resumes, start=1):
+        parsed_jobs: list[JobDescriptionDocument] = []
+        pasted_parts = [part.strip() for part in pasted_jobs.split("\n---\n") if part.strip()]
+        for idx, text in enumerate(pasted_parts, start=1):
+            parsed_jobs.append(JobDescriptionDocument(job_id=f"pasted_job_{idx}", filename=f"pasted_job_{idx}.txt", text=text))
+        if uploaded_jobs:
+            for idx, uploaded in enumerate(uploaded_jobs, start=1):
                 try:
                     text = parse_uploaded_text(uploaded, parser)
-                    docs.append(ResumeDocument(candidate_id=f"candidate_{idx}", filename=uploaded.name, text=text))
+                    parsed_jobs.append(JobDescriptionDocument(job_id=f"job_{idx}", filename=uploaded.name, text=text))
                 except Exception as exc:
                     st.error(f"{uploaded.name}: {exc}")
-            if docs:
-                st.session_state["resume_docs"] = docs
+        if parsed_jobs:
+            signature = job_docs_signature(parsed_jobs)
+            if signature != st.session_state.get("job_docs_signature", []):
+                st.session_state["structured_extraction"] = {}
+                st.session_state["results"] = []
+            st.session_state["job_docs"] = parsed_jobs
+            st.session_state["job_docs_signature"] = signature
 
-        resume_docs = st.session_state.get("resume_docs", [])
-        st.write(f"Loaded resumes: {len(resume_docs)}")
+        job_docs = st.session_state.get("job_docs", [])
+        st.write(f"Loaded job descriptions: {len(job_docs)}")
+        if st.button("Clear job descriptions"):
+            st.session_state["job_docs"] = []
+            st.session_state["job_docs_signature"] = []
+            st.session_state["job_descriptions_text"] = ""
+            st.session_state["structured_extraction"] = {}
+            st.session_state["results"] = []
+            st.rerun()
 
     with st.expander("Text extraction preview", expanded=False):
-        st.markdown("**Job description preview**")
-        st.text(shorten_text(st.session_state.get("jd_text", ""), 1500))
-        for doc in st.session_state.get("resume_docs", []):
-            st.markdown(f"**{doc.filename}**")
-            st.text(shorten_text(doc.text, 1000))
+        st.markdown("**Resume/CV preview**")
+        st.text(shorten_text(st.session_state.get("resume_text", ""), 1500))
+        for job in st.session_state.get("job_docs", []):
+            st.markdown(f"**{job.filename}**")
+            st.text(shorten_text(job.text, 1000))
 
     # # Display extracted keywords section
     # display_extracted_keywords()
@@ -322,12 +415,17 @@ def screening_page() -> None:
     )
     weights = make_weight_controls()
 
-    if st.button("Run matching", type="primary"):
+    if st.button("Find best matching job", type="primary"):
         try:
-            with st.spinner("Scoring resumes..."):
-                st.session_state["results"] = match_resumes(
-                    jd_text=st.session_state.get("jd_text", ""),
-                    resumes=st.session_state.get("resume_docs", []),
+            resume = ResumeDocument(
+                candidate_id="uploaded_resume",
+                filename=st.session_state.get("resume_filename", "uploaded_resume.txt"),
+                text=st.session_state.get("resume_text", ""),
+            )
+            with st.spinner("Scoring job descriptions..."):
+                st.session_state["results"] = match_jobs_to_resume(
+                    resume=resume,
+                    job_descriptions=st.session_state.get("job_docs", []),
                     model_key=model_label,
                     weights=weights,
                     use_hybrid_score=use_hybrid,
@@ -344,11 +442,14 @@ def screening_page() -> None:
     if not results:
         return
 
-    st.subheader("Ranked Candidates")
-    table = pd.DataFrame([result.to_export_dict() for result in results])
+    best = results[0]
+    st.success(f"Best match: {best.filename} with a {best.final_score:.2f}% final score ({best.recommendation}).")
+
+    st.subheader("Ranked Job Descriptions")
+    table = job_results_to_dataframe(results)
     visible_columns = [
         "rank",
-        "filename",
+        "job_description_file",
         "final_score",
         "semantic_score",
         "recommendation",
@@ -356,58 +457,71 @@ def screening_page() -> None:
         "missing_skills",
         "runtime_seconds",
     ]
-    st.dataframe(table[visible_columns], use_container_width=True, hide_index=True)
-    st.plotly_chart(candidate_score_bar(results), use_container_width=True)
+    display_table = table[visible_columns].rename(
+        columns={
+            "job_description_file": "job_description",
+            "matched_skills": "matched_resume_skills",
+            "missing_skills": "missing_job_skills",
+        }
+    )
+    st.dataframe(display_table, use_container_width=True, hide_index=True)
+    st.plotly_chart(job_score_bar(results), use_container_width=True)
 
-    csv_bytes = results_to_csv_bytes(results)
-    st.download_button("Export ranking CSV", data=csv_bytes, file_name="resume_screening_results.csv", mime="text/csv")
-    report = screening_report_markdown(st.session_state["jd_text"], results)
-    st.download_button("Export screening report", data=report, file_name="screening_report.md", mime="text/markdown")
+    csv_bytes = job_results_to_csv_bytes(results)
+    st.download_button("Export ranking CSV", data=csv_bytes, file_name="job_matching_results.csv", mime="text/csv")
+    report = job_matching_report_markdown(st.session_state["resume_text"], results)
+    st.download_button("Export job matching report", data=report, file_name="job_matching_report.md", mime="text/markdown")
 
-    st.subheader("Candidate Detail Analysis")
+    st.subheader("Job Match Detail Analysis")
     selected = st.selectbox(
-        "Candidate",
+        "Job description",
         options=[result.filename for result in results],
         index=0,
     )
     result = next(item for item in results if item.filename == selected)
+    selected_job = next((job for job in st.session_state.get("job_docs", []) if job.filename == selected), None)
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Final score", f"{result.final_score:.2f}%")
     c2.metric("Semantic score", f"{result.semantic_score:.2f}%")
     c3.metric("Resume years", f"{result.detected_resume_years:g}")
-    c4.metric("Required years", f"{result.required_years:g}")
+    c4.metric("Job required years", f"{result.required_years:g}")
 
     detail_left, detail_right = st.columns(2)
     with detail_left:
-        st.markdown("**Matched skills**")
+        st.markdown("**Matched resume skills**")
         st.write(", ".join(result.matched_skills) or "None detected")
         st.markdown("**Education/certification evidence**")
         evidence = result.education_signals + result.certification_signals
         st.write(", ".join(evidence) or "No dictionary evidence detected")
     with detail_right:
-        st.markdown("**Missing required skills**")
+        st.markdown("**Missing job-required skills**")
         st.write(", ".join(result.missing_skills) or "None detected")
-        st.markdown("**Recommendation**")
+        st.markdown("**Match label**")
         st.write(result.recommendation)
+
+    if selected_job:
+        with st.expander("Selected job description preview", expanded=False):
+            st.text(shorten_text(selected_job.text, 1800))
 
     if result.structured_extraction:
         with st.expander("Structured extraction used for scoring", expanded=False):
             st.json(result.structured_extraction)
 
     if st.button("Generate explanation"):
-        explanation = generate_candidate_explanation(result, st.session_state["jd_text"], result.cleaned_resume_text, use_llm=True)
+        job_text = selected_job.text if selected_job else ""
+        explanation = generate_candidate_explanation(result, job_text, result.cleaned_resume_text, use_llm=True)
         st.session_state["explanations"][result.filename] = explanation
     if result.filename in st.session_state["explanations"]:
         st.markdown(st.session_state["explanations"][result.filename])
 
-    st.subheader("Chatbot")
+    st.subheader("Job Match Chatbot")
     for message in st.session_state["chat_history"]:
         with st.chat_message(message["role"]):
             st.write(message["content"])
-    question = st.chat_input("Ask about candidate ranking, missing skills, or top candidates")
+    question = st.chat_input("Ask about top jobs, missing skills, or why a job ranked highly")
     if question:
         st.session_state["chat_history"].append({"role": "user", "content": question})
-        answer = answer_hr_question(question, results, st.session_state["jd_text"], use_llm=True)
+        answer = answer_job_match_question(question, results, st.session_state["resume_text"], use_llm=True)
         st.session_state["chat_history"].append({"role": "assistant", "content": answer})
         st.rerun()
 
@@ -452,23 +566,25 @@ def evaluation_page() -> None:
 def rag_page() -> None:
     st.title("Qdrant RAG Vector Store")
     st.write(
-        "This page stores cleaned JD and resume chunks as embedding vectors in Qdrant. "
+        "This page stores cleaned resume and job description chunks as embedding vectors in Qdrant. "
         "The retrieved chunks can be used as grounded context for a future RAG explanation or HR question-answering module."
     )
 
-    jd_text = st.session_state.get("jd_text", "")
-    resume_docs: list[ResumeDocument] = st.session_state.get("resume_docs", [])
-    if not jd_text or not resume_docs:
-        st.info("Load or upload documents on the Screening page first, or use the sample data button below.")
+    resume_text = st.session_state.get("resume_text", "")
+    job_docs: list[JobDescriptionDocument] = st.session_state.get("job_docs", [])
+    if not resume_text or not job_docs:
+        st.info("Load or upload documents on the Job Matching page first, or use the sample data button below.")
         if st.button("Load sample documents for RAG"):
-            jd_text, resume_docs = load_sample_documents()
-            st.session_state["jd_text"] = jd_text
-            st.session_state["resume_docs"] = resume_docs
+            resume_filename, resume_text, job_docs = load_sample_documents()
+            st.session_state["resume_filename"] = resume_filename
+            st.session_state["resume_text"] = resume_text
+            st.session_state["job_docs"] = job_docs
+            st.session_state["job_docs_signature"] = job_docs_signature(job_docs)
             st.rerun()
         return
 
     c1, c2, c3 = st.columns(3)
-    c1.metric("Documents", len(resume_docs) + 1)
+    c1.metric("Documents", len(job_docs) + 1)
     c2.metric("Collection", QDRANT_COLLECTION_NAME)
     c3.metric("Embedding model", DEFAULT_RAG_EMBEDDING_MODEL.split("/")[-1])
 
@@ -477,17 +593,22 @@ def rag_page() -> None:
     else:
         st.caption(f"Qdrant local path: {QDRANT_LOCAL_PATH}")
 
-    if st.button("Index current JD and resumes", type="primary"):
+    if st.button("Index current resume and job descriptions", type="primary"):
         try:
             with st.spinner("Embedding chunks and writing vectors to Qdrant..."):
                 store = QdrantRAGStore()
-                count = store.index_documents(build_rag_documents(jd_text, resume_docs))
+                resume = ResumeDocument(
+                    candidate_id="uploaded_resume",
+                    filename=st.session_state.get("resume_filename", "uploaded_resume.txt"),
+                    text=resume_text,
+                )
+                count = store.index_documents(build_job_matching_rag_documents(resume, job_docs))
             st.success(f"Indexed {count} chunks into Qdrant collection '{QDRANT_COLLECTION_NAME}'.")
         except Exception as exc:
             st.error(str(exc))
 
     st.subheader("Retrieve RAG Context")
-    query = st.text_input("Search query", value="Which candidates show Python, NLP, and cloud deployment experience?")
+    query = st.text_input("Search query", value="Which job descriptions best match Python, NLP, and cloud deployment experience?")
     limit = st.slider("Top chunks", min_value=1, max_value=10, value=5)
     document_type = st.selectbox("Document type filter", ["All", "resume", "job_description"])
     if st.button("Search Qdrant"):
@@ -561,10 +682,10 @@ def dataset_page() -> None:
 
 def main() -> None:
     init_state()
-    page = st.sidebar.radio("Navigation", ["Home", "Screening", "Evaluation", "RAG Vector Store", "Dataset & Thesis"])
+    page = st.sidebar.radio("Navigation", ["Home", "Job Matching", "Evaluation", "RAG Vector Store", "Dataset & Thesis"])
     if page == "Home":
         home_page()
-    elif page == "Screening":
+    elif page == "Job Matching":
         screening_page()
     elif page == "Evaluation":
         evaluation_page()

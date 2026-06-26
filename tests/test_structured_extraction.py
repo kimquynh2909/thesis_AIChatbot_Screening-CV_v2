@@ -36,15 +36,15 @@ def test_normalize_jd_extraction_keeps_expected_keys() -> None:
     assert normalized["required_skills"] == ["Python"]
 
 
-def test_normalize_cv_extraction_normalizes_requirement_matches() -> None:
+def test_normalize_cv_extraction_keeps_expected_keys() -> None:
     normalized = normalize_cv_extraction(
         {
             "skills": ["Python"],
-            "jd_requirements": [{"requirement": "Python", "status": "yes", "evidence": "Python"}],
+            "unknown": ["ignored"],
         }
     )
+    assert list(normalized.keys()) == ["skills", "education", "experience", "projects"]
     assert normalized["skills"] == ["Python"]
-    assert normalized["jd_requirements"] == [{"requirement": "Python", "status": "unclear", "evidence": "Python"}]
 
 
 def test_deterministic_jd_extraction_returns_calculation_schema() -> None:
@@ -54,12 +54,12 @@ def test_deterministic_jd_extraction_returns_calculation_schema() -> None:
     assert "3 years" in extraction["experience"]
 
 
-def test_deterministic_cv_extraction_returns_jd_requirement_evidence() -> None:
+def test_deterministic_cv_extraction_returns_resume_fields_only() -> None:
     jd_extraction = extract_job_description_json(JD, use_llm=False)
     extraction = extract_cv_json(CV, jd_extraction, use_llm=False)
+    assert list(extraction.keys()) == ["skills", "education", "experience", "projects"]
     assert "python" in extraction["skills"]
     assert extraction["projects"]
-    assert any(item["requirement"] == "python" and item["status"] == "matched" for item in extraction["jd_requirements"])
 
 
 def test_screening_json_wraps_jd_and_resume_extractions() -> None:

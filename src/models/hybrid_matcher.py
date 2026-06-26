@@ -176,9 +176,8 @@ def skill_analysis_from_extraction(jd_extraction: dict[str, Any], resume_extract
         _string_list(jd_extraction.get("required_skills", [])) + _string_list(jd_extraction.get("tools", []))
     )
     resume_skills = _unique_normalized(_string_list(resume_extraction.get("skills", [])))
-    matched_from_requirements = _matched_requirements_from_extraction(resume_extraction, required_skills)
 
-    matched = sorted(set(required_skills).intersection(resume_skills).union(matched_from_requirements))
+    matched = sorted(set(required_skills).intersection(resume_skills))
     missing = sorted(set(required_skills).difference(matched))
     score = len(matched) / len(required_skills) if required_skills else 0.0
     return SkillAnalysis(
@@ -206,23 +205,6 @@ def education_certification_score_from_extraction(
 
     matched = sum(1 for requirement in jd_education if any(_texts_match(requirement, evidence) for evidence in resume_education))
     return clamp01(matched / len(jd_education)), resume_education, certification_signals
-
-
-def _matched_requirements_from_extraction(resume_extraction: dict[str, Any], required_skills: list[str]) -> set[str]:
-    matched: set[str] = set()
-    requirements = resume_extraction.get("jd_requirements", [])
-    if not isinstance(requirements, list):
-        return matched
-    for item in requirements:
-        if not isinstance(item, dict):
-            continue
-        if str(item.get("status", "")).lower() != "matched":
-            continue
-        requirement = _normalize_term(str(item.get("requirement", "")))
-        for required_skill in required_skills:
-            if _texts_match(required_skill, requirement):
-                matched.add(required_skill)
-    return matched
 
 
 def _string_list(value: Any) -> list[str]:
