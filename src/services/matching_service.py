@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+import traceback
 from dataclasses import asdict, dataclass, replace
 from typing import Any
 
@@ -47,12 +48,14 @@ class MatchResult:
     cleaned_resume_text: str
     breakdown: HybridScoreBreakdown
     structured_extraction: dict[str, Any] | None = None
+    rag_evidence: list[dict[str, Any]] | None = None
 
     def to_export_dict(self) -> dict[str, object]:
         data = asdict(self)
         data.pop("cleaned_resume_text", None)
         data.pop("breakdown", None)
         data.pop("structured_extraction", None)
+        data.pop("rag_evidence", None)
         for key in ["matched_skills", "missing_skills", "resume_skills", "jd_skills", "education_signals", "certification_signals"]:
             data[key] = ", ".join(data[key])
         return data
@@ -105,6 +108,8 @@ def match_resumes(
     use_structured_extraction_score: bool = True,
     use_llm_extraction: bool = True,
     structured_extraction: dict[str, Any] | None = None,
+    include_sbert_rag_evidence: bool = False,
+    sbert_rag_top_k: int = 5,
 ) -> list[MatchResult]:
     if not jd_text or not jd_text.strip():
         raise ValueError("A job description is required before matching resumes.")
@@ -131,6 +136,7 @@ def match_resumes(
     )
     jd_extraction = extraction_payload.get("job_description", {}) if extraction_payload else {}
     resume_extractions = _resume_extractions_by_identity(extraction_payload)
+    sbert_rag = _build_sbert_rag_retriever(model_key, include_sbert_rag_evidence, matcher)
 
     results: list[MatchResult] = []
     for resume, resume_text, semantic_score in zip(resumes, cleaned_resumes, semantic_scores, strict=False):
@@ -140,6 +146,15 @@ def match_resumes(
         else:
             breakdown = hybrid.explainable_score(semantic_score, resume_text, cleaned_jd)
         final_score = breakdown.final_score if use_hybrid_score else round(float(semantic_score) * 100.0, 2)
+        rag_evidence = _retrieve_resume_sbert_rag_evidence(
+            retriever=sbert_rag,
+            jd_text=jd_text,
+            resume=resume,
+            top_k=sbert_rag_top_k,
+            jd_extraction=jd_extraction,
+            resume_extraction=resume_extraction,
+            use_llm_extraction=use_llm_extraction,
+        )
         results.append(
             MatchResult(
                 rank=0,
@@ -162,6 +177,7 @@ def match_resumes(
                 cleaned_resume_text=clean_for_display(resume.text),
                 breakdown=breakdown,
                 structured_extraction=resume_extraction,
+                rag_evidence=rag_evidence,
             )
         )
 
@@ -179,6 +195,8 @@ def match_jobs_to_resume(
     use_structured_extraction_score: bool = True,
     use_llm_extraction: bool = True,
     structured_extraction: dict[str, Any] | None = None,
+    include_sbert_rag_evidence: bool = False,
+    sbert_rag_top_k: int = 5,
 ) -> list[MatchResult]:
     if not resume.text or not resume.text.strip():
         raise ValueError("A resume/CV is required before matching job descriptions.")
@@ -204,6 +222,14 @@ def match_jobs_to_resume(
         skill_extractor=skill_extractor,
     )
     job_extractions = _job_extractions_by_identity(extraction_payload)
+    sbert_rag = _build_sbert_rag_retriever(model_key, include_sbert_rag_evidence, matcher)
+    resume_rag_evidence = _retrieve_resume_query_sbert_qdrant_jobs(
+        retriever=sbert_rag,
+        resume=resume,
+        top_k=sbert_rag_top_k,
+        resume_extraction=None,
+        use_llm_extraction=use_llm_extraction,
+    )
 
     results: list[MatchResult] = []
     for job, job_text, semantic_score in zip(job_descriptions, cleaned_jobs, semantic_scores, strict=False):
@@ -237,6 +263,7 @@ def match_jobs_to_resume(
                 cleaned_resume_text=clean_for_display(resume.text),
                 breakdown=breakdown,
                 structured_extraction=extraction or None,
+                rag_evidence=resume_rag_evidence,
             )
         )
 
@@ -366,3 +393,68 @@ def _job_extractions_by_identity(extraction_payload: dict[str, Any] | None) -> d
             if key:
                 indexed[str(key)] = normalized
     return indexed
+
+
+def _build_sbert_rag_retriever(model_key: str, enabled: bool, matcher: Any):
+    if not enabled or model_key.lower() != MODEL_SBERT:
+        return None
+
+    from src.rag.qdrant_job_retriever import QdrantJobRetriever
+
+    return QdrantJobRetriever(model_name=getattr(matcher, "model_name", None) or "sentence-transformers/all-MiniLM-L6-v2")
+
+
+def _retrieve_resume_sbert_rag_evidence(
+    retriever: Any,
+    jd_text: str,
+    resume: ResumeDocument,
+    top_k: int,
+    jd_extraction: dict[str, Any] | None,
+    resume_extraction: dict[str, Any] | None,
+    use_llm_extraction: bool,
+) -> list[dict[str, Any]] | None:
+    if retriever is None:
+        return None
+    try:
+        # The SBERT score remains the ranking score. Qdrant job metadata is only
+        # an explainability/debugging side channel and does not change final_score.
+        evidence = retriever.retrieve_resume_job_evidence(
+            resume_text=resume.text,
+            top_k=top_k,
+            candidate_name=resume.filename,
+            resume_id=resume.candidate_id,
+            resume_extraction=resume_extraction,
+            use_llm_extraction=use_llm_extraction,
+        )
+        return [asdict(item) for item in evidence]
+    except Exception as exc:
+        print(f"SBERT Qdrant resume-job retrieval failed for resume {resume.filename}: {type(exc).__name__}: {exc}", flush=True)
+        traceback.print_exc()
+        return None
+
+
+def _retrieve_resume_query_sbert_qdrant_jobs(
+    retriever: Any,
+    resume: ResumeDocument,
+    top_k: int,
+    resume_extraction: dict[str, Any] | None,
+    use_llm_extraction: bool,
+) -> list[dict[str, Any]] | None:
+    if retriever is None:
+        return None
+    try:
+        # The SBERT score remains the ranking score. Qdrant job metadata is only
+        # an explainability/debugging side channel and does not change final_score.
+        evidence = retriever.retrieve_resume_job_evidence(
+            resume_text=resume.text,
+            top_k=top_k,
+            candidate_name=resume.filename,
+            resume_id=resume.candidate_id,
+            resume_extraction=resume_extraction,
+            use_llm_extraction=use_llm_extraction,
+        )
+        return [asdict(item) for item in evidence]
+    except Exception as exc:
+        print(f"SBERT Qdrant resume-job retrieval failed for {resume.filename}: {type(exc).__name__}: {exc}", flush=True)
+        traceback.print_exc()
+        return None

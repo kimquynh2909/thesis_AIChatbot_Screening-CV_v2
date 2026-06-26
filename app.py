@@ -13,11 +13,10 @@ if str(ROOT) not in sys.path:
 
 from config.settings import (
     DEFAULT_HYBRID_WEIGHTS,
-    DEFAULT_RAG_EMBEDDING_MODEL,
     MODEL_NAMES,
     PROCESSED_DATA_DIR,
-    QDRANT_COLLECTION_NAME,
-    QDRANT_LOCAL_PATH,
+    QDRANT_JOB_COLLECTION_NAME,
+    QDRANT_JOB_EMBEDDING_MODEL,
     QDRANT_URL,
     SAMPLE_JD_DIR,
     SAMPLE_RESUME_DIR,
@@ -29,9 +28,10 @@ from src.llm.explanation_chain import generate_candidate_explanation
 from src.llm.structured_extraction import extract_cv_json, extract_job_description_json
 from src.preprocessing.document_parser import DocumentParser
 from src.preprocessing.skill_extractor import SkillExtractor
+from src.rag.qdrant_job_retriever import QdrantJobRetriever
 from src.services.export_service import job_matching_report_markdown, job_results_to_csv_bytes, job_results_to_dataframe
 from src.services.matching_service import JobDescriptionDocument, ResumeDocument, match_jobs_to_resume
-from src.services.vector_store_service import QdrantRAGStore, build_job_matching_rag_documents, build_rag_context
+from src.utils.constants import MODEL_SBERT
 from src.utils.file_utils import shorten_text
 
 
@@ -55,6 +55,7 @@ def init_state() -> None:
         "explanations": {},
         "chat_history": [],
         "rag_results": [],
+        "sbert_rag_requested": False,
         "structured_extraction": {},
 
     }
@@ -245,6 +246,76 @@ def display_structured_extraction() -> None:
         )
         st.json(extraction)
 
+
+def display_sbert_qdrant_jobs(results) -> None:
+    st.subheader("SBERT Qdrant Top-K Jobs Related to Resume")
+    st.caption(
+        "Flow: clean the full resume text, extract CV fields, embed one full query, "
+        "retrieve top-K jobs from Qdrant, and display the returned payload metadata. "
+        "This does not modify the SBERT semantic score or final ranking score."
+    )
+
+    evidence = None
+    for result in results:
+        result_evidence = getattr(result, "rag_evidence", None)
+        if result_evidence is not None:
+            evidence = result_evidence
+            break
+    if evidence is None:
+        st.warning("SBERT RAG evidence could not be generated for this candidate.")
+        return
+    if not evidence:
+        st.info("No Qdrant jobs were retrieved for this resume.")
+        return
+    if not any(isinstance(item, dict) and item.get("job_id") for item in evidence):
+        st.warning(
+            "These saved results do not contain Qdrant job metadata. "
+            "Click 'Find best matching job' again to refresh the top-K Qdrant jobs."
+        )
+        return
+
+    candidate_name = evidence[0].get("candidate_name") or "uploaded resume"
+    with st.expander(f"SBERT RAG Evidence - {candidate_name}", expanded=True):
+        rows = [
+            {
+                "rank": item.get("rank"),
+                "score": round(float(item.get("score", 0.0)), 4),
+                "job_id": item.get("job_id"),
+                "payload_chunk_id": item.get("chunk_id"),
+                "payload_chunk_index": item.get("chunk_index"),
+                "job_title": item.get("job_title"),
+                "category": item.get("category") or item.get("job_category"),
+                "required_skills": shorten_text(str(item.get("required_skills") or ""), 180),
+                "job_description_preview": shorten_text(str(item.get("job_description") or ""), 220),
+                "qdrant_text_preview": shorten_text(str(item.get("text") or item.get("chunk_text") or ""), 220),
+            }
+            for item in evidence
+        ]
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+        for item in evidence:
+            qdrant_text = item.get("text") or item.get("chunk_text") or ""
+            st.markdown("---")
+            st.markdown(
+                f"**Rank {item.get('rank')}** | "
+                f"similarity score: `{float(item.get('score', 0.0)):.4f}` | "
+                f"job id: `{item.get('job_id') or 'Unknown'}` | "
+                f"category: `{item.get('category') or item.get('job_category') or 'Unknown'}`"
+            )
+            st.markdown(f"**Job title:** {item.get('job_title') or 'Unknown'}")
+            st.markdown(
+                f"**Qdrant payload IDs:** chunk_id `{item.get('chunk_id') or 'Unknown'}`, "
+                f"chunk_index `{item.get('chunk_index')}`"
+            )
+            st.markdown(f"**Required skills:** {item.get('required_skills') or 'Unknown'}")
+            st.markdown("**Full job description metadata**")
+            st.write(item.get("job_description") or "Not available")
+            st.markdown("**Qdrant text payload**")
+            st.write(qdrant_text)
+            st.markdown("**Full Qdrant payload**")
+            st.json(item.get("payload", {}))
+
+
 def make_weight_controls() -> dict[str, float]:
     st.caption("Hybrid scoring weights")
     semantic = st.slider("Semantic similarity", 0.0, 1.0, DEFAULT_HYBRID_WEIGHTS["semantic"], 0.05)
@@ -414,6 +485,12 @@ def screening_page() -> None:
         help="If no extracted JSON is already available, scoring can call Gemini. Without an API key it falls back to deterministic JSON extraction.",
     )
     weights = make_weight_controls()
+    show_sbert_rag = False
+    sbert_rag_top_k = 5
+    if model_label == MODEL_SBERT:
+        show_sbert_rag = st.checkbox("Show Qdrant top-K jobs related to resume", value=False)
+        if show_sbert_rag:
+            sbert_rag_top_k = st.slider("Top-K Qdrant jobs", min_value=1, max_value=10, value=5, step=1)
 
     if st.button("Find best matching job", type="primary"):
         try:
@@ -432,7 +509,10 @@ def screening_page() -> None:
                     use_structured_extraction_score=use_structured_score,
                     use_llm_extraction=use_llm_scoring_extraction,
                     structured_extraction=st.session_state.get("structured_extraction") or None,
+                    include_sbert_rag_evidence=model_label == MODEL_SBERT and show_sbert_rag,
+                    sbert_rag_top_k=int(sbert_rag_top_k),
                 )
+                st.session_state["sbert_rag_requested"] = model_label == MODEL_SBERT and show_sbert_rag
                 st.session_state["explanations"] = {}
                 st.session_state["chat_history"] = []
         except Exception as exc:
@@ -466,6 +546,12 @@ def screening_page() -> None:
     )
     st.dataframe(display_table, use_container_width=True, hide_index=True)
     st.plotly_chart(job_score_bar(results), use_container_width=True)
+    if (
+        st.session_state.get("sbert_rag_requested")
+        and results
+        and all(result.model_key == MODEL_SBERT for result in results)
+    ):
+        display_sbert_qdrant_jobs(results)
 
     csv_bytes = job_results_to_csv_bytes(results)
     st.download_button("Export ranking CSV", data=csv_bytes, file_name="job_matching_results.csv", mime="text/csv")
@@ -564,61 +650,64 @@ def evaluation_page() -> None:
 
 
 def rag_page() -> None:
-    st.title("Qdrant RAG Vector Store")
+    st.title("Qdrant Resume-to-Job Metadata Retrieval")
     st.write(
-        "This page stores cleaned resume and job description chunks as embedding vectors in Qdrant. "
-        "The retrieved chunks can be used as grounded context for a future RAG explanation or HR question-answering module."
+        "This page cleans one full resume/CV, extracts CV fields, embeds one full query, retrieves top-K related jobs "
+        "from Qdrant, and displays the returned payload metadata."
     )
 
-    resume_text = st.session_state.get("resume_text", "")
-    job_docs: list[JobDescriptionDocument] = st.session_state.get("job_docs", [])
-    if not resume_text or not job_docs:
-        st.info("Load or upload documents on the Job Matching page first, or use the sample data button below.")
-        if st.button("Load sample documents for RAG"):
-            resume_filename, resume_text, job_docs = load_sample_documents()
-            st.session_state["resume_filename"] = resume_filename
-            st.session_state["resume_text"] = resume_text
-            st.session_state["job_docs"] = job_docs
-            st.session_state["job_docs_signature"] = job_docs_signature(job_docs)
-            st.rerun()
-        return
-
     c1, c2, c3 = st.columns(3)
-    c1.metric("Documents", len(job_docs) + 1)
-    c2.metric("Collection", QDRANT_COLLECTION_NAME)
-    c3.metric("Embedding model", DEFAULT_RAG_EMBEDDING_MODEL.split("/")[-1])
+    resume_text = st.session_state.get("resume_text", "")
+    c1.metric("Loaded resume", "Yes" if resume_text.strip() else "No")
+    c2.metric("Qdrant collection", QDRANT_JOB_COLLECTION_NAME)
+    c3.metric("Embedding model", QDRANT_JOB_EMBEDDING_MODEL.split("/")[-1])
 
     if QDRANT_URL:
         st.caption(f"Qdrant server: {QDRANT_URL}")
+
+    if not resume_text.strip():
+        st.info("Load or upload a resume/CV on the Job Matching page first, or use the sample data button below.")
+        if st.button("Load sample documents for RAG"):
+            resume_filename, sample_resume_text, job_docs = load_sample_documents()
+            st.session_state["resume_filename"] = resume_filename
+            st.session_state["resume_text"] = sample_resume_text
+            st.session_state["job_docs"] = job_docs
+            st.session_state["job_docs_signature"] = job_docs_signature(job_docs)
+            st.rerun()
+
+    query_source = st.radio("Query source", ["Loaded resume/CV", "Paste resume text"], horizontal=True)
+    if query_source == "Loaded resume/CV" and resume_text.strip():
+        query_text = resume_text
+        with st.expander("Full query resume/CV", expanded=False):
+            st.text(shorten_text(query_text, 2500))
     else:
-        st.caption(f"Qdrant local path: {QDRANT_LOCAL_PATH}")
+        query_text = st.text_area(
+            "Full resume/CV query",
+            value=resume_text
+            or (
+                "Human resources generalist with experience in employee relations, talent acquisition, onboarding, "
+                "performance management, HR compliance, policy administration, and HRIS reporting."
+            ),
+            height=180,
+        )
 
-    if st.button("Index current resume and job descriptions", type="primary"):
-        try:
-            with st.spinner("Embedding chunks and writing vectors to Qdrant..."):
-                store = QdrantRAGStore()
-                resume = ResumeDocument(
-                    candidate_id="uploaded_resume",
-                    filename=st.session_state.get("resume_filename", "uploaded_resume.txt"),
-                    text=resume_text,
-                )
-                count = store.index_documents(build_job_matching_rag_documents(resume, job_docs))
-            st.success(f"Indexed {count} chunks into Qdrant collection '{QDRANT_COLLECTION_NAME}'.")
-        except Exception as exc:
-            st.error(str(exc))
+    use_llm = st.toggle(
+        "Use Gemini CV field extraction for Qdrant query",
+        value=True,
+        help="If Gemini is unavailable, the existing deterministic extractor is used as fallback.",
+    )
+    limit = st.slider("Top-K Qdrant jobs", min_value=1, max_value=10, value=5)
 
-    st.subheader("Retrieve RAG Context")
-    query = st.text_input("Search query", value="Which job descriptions best match Python, NLP, and cloud deployment experience?")
-    limit = st.slider("Top chunks", min_value=1, max_value=10, value=5)
-    document_type = st.selectbox("Document type filter", ["All", "resume", "job_description"])
-    if st.button("Search Qdrant"):
+    if st.button("Retrieve top-K Qdrant jobs", type="primary"):
         try:
-            with st.spinner("Retrieving nearest chunks..."):
-                store = QdrantRAGStore()
-                st.session_state["rag_results"] = store.search(
-                    query,
-                    limit=limit,
-                    document_type=None if document_type == "All" else document_type,
+            with st.spinner("Embedding full resume/CV and retrieving jobs from Qdrant..."):
+                retriever = QdrantJobRetriever()
+                st.session_state["rag_results"] = retriever.retrieve_resume_job_evidence(
+                    query_text,
+                    top_k=limit,
+                    candidate_name=st.session_state.get("resume_filename", "uploaded_resume.txt"),
+                    resume_id="uploaded_resume",
+                    use_llm_extraction=use_llm,
                 )
         except Exception as exc:
             st.error(str(exc))
@@ -630,16 +719,22 @@ def rag_page() -> None:
     rows = [
         {
             "score": round(result.score, 4),
-            "type": result.document_type,
-            "filename": result.filename,
+            "job_id": result.job_id,
             "chunk_id": result.chunk_id,
-            "preview": shorten_text(result.text, 220),
+            "chunk_index": result.chunk_index,
+            "job_title": result.job_title,
+            "category": result.category,
+            "required_skills": shorten_text(result.required_skills or "", 220),
+            "job_description_preview": shorten_text(result.job_description or "", 260),
+            "qdrant_text_preview": shorten_text(result.text or result.chunk_text or "", 260),
         }
         for result in results
     ]
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-    st.markdown("**RAG context block**")
-    st.code(build_rag_context(results), language="text")
+
+    for result in results:
+        with st.expander(f"Full Qdrant payload - rank {result.rank}: {result.job_title or result.job_id}", expanded=False):
+            st.json(result.payload)
 
 
 def dataset_page() -> None:
@@ -682,14 +777,14 @@ def dataset_page() -> None:
 
 def main() -> None:
     init_state()
-    page = st.sidebar.radio("Navigation", ["Home", "Job Matching", "Evaluation", "RAG Vector Store", "Dataset & Thesis"])
+    page = st.sidebar.radio("Navigation", ["Home", "Job Matching", "Evaluation", "Qdrant Job Retrieval", "Dataset & Thesis"])
     if page == "Home":
         home_page()
     elif page == "Job Matching":
         screening_page()
     elif page == "Evaluation":
         evaluation_page()
-    elif page == "RAG Vector Store":
+    elif page == "Qdrant Job Retrieval":
         rag_page()
     else:
         dataset_page()

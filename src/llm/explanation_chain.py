@@ -28,6 +28,7 @@ Model evidence:
 - Missing required skills: {missing_skills}
 - Experience detected in resume: {resume_years} years
 - Experience required by JD: {required_years} years
+- Retrieved Qdrant job metadata: {rag_evidence}
 
 Write a concise HR-friendly explanation with these sections:
 1. Overall assessment
@@ -49,7 +50,7 @@ def deterministic_explanation(result: Any) -> str:
     matched = ", ".join(result.matched_skills[:12]) or "No required dictionary skills were detected in both texts."
     missing = ", ".join(result.missing_skills[:12]) or "No required dictionary skills were missing from the dictionary analysis."
     label = recommendation_label(result.final_score)
-    return dedent(
+    explanation = dedent(
         f"""
         Overall assessment: {label}. The candidate received a final match score of {result.final_score:.2f}% and a semantic similarity score of {result.semantic_score:.2f}%.
 
@@ -60,6 +61,10 @@ def deterministic_explanation(result: Any) -> str:
         Suggested HR follow-up questions: Ask the candidate to clarify the missing skills, provide examples of relevant project impact, and confirm experience level or certifications where the resume is ambiguous.
         """
     ).strip()
+    rag_evidence = _format_rag_evidence(result)
+    if rag_evidence:
+        explanation = f"{explanation}\n\nRetrieved Qdrant job metadata: {rag_evidence}"
+    return explanation
 
 
 def _try_generate_with_gemini(result: Any, jd_text: str, resume_text: str) -> str | None:
@@ -89,8 +94,28 @@ def _try_generate_with_gemini(result: Any, jd_text: str, resume_text: str) -> st
                 "missing_skills": ", ".join(result.missing_skills) or "None detected",
                 "resume_years": f"{result.detected_resume_years:g}",
                 "required_years": f"{result.required_years:g}",
+                "rag_evidence": _format_rag_evidence(result) or "None available",
             }
         )
         return getattr(response, "content", str(response)).strip()
     except Exception:
         return None
+
+
+def _format_rag_evidence(result: Any, max_chunks: int = 3, max_chars: int = 280) -> str:
+    evidence = getattr(result, "rag_evidence", None) or []
+    lines = []
+    for item in evidence[:max_chunks]:
+        if not isinstance(item, dict):
+            continue
+        rank = item.get("rank")
+        score = float(item.get("score", 0.0) or 0.0)
+        job_id = item.get("job_id") or "unknown job"
+        job_title = item.get("job_title") or "unknown title"
+        job_category = item.get("category") or item.get("job_category") or "unknown category"
+        required_skills = shorten_text(str(item.get("required_skills") or ""), max_chars)
+        lines.append(
+            f"{job_title} ({job_category}), job {job_id}, rank {rank}, "
+            f"score {score:.4f}, required skills: {required_skills}"
+        )
+    return " | ".join(lines)

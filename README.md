@@ -140,6 +140,7 @@ Index sample documents:
 
 ```bash
 python scripts/import_embeddings_to_qdrant.py
+python scripts/check_qdrant_retrieval.py --top-k 5 --no-llm
 ```
 
 Index your own files:

@@ -104,9 +104,11 @@ def deterministic_job_match_answer(question: str, results: list[Any]) -> str:
         for result in results[:3]:
             matched = ", ".join(result.matched_skills[:8]) or "no required dictionary skills detected"
             missing = ", ".join(result.missing_skills[:5]) or "no required dictionary skills missing"
+            evidence = _format_rag_evidence(result, max_chunks=1, max_chars=180)
+            evidence_sentence = f" Evidence: {evidence}." if evidence else ""
             lines.append(
                 f"#{result.rank} {result.filename}: {result.final_score:.2f}% ({result.recommendation}). "
-                f"Matched: {matched}. Missing: {missing}."
+                f"Matched: {matched}. Missing: {missing}.{evidence_sentence}"
             )
         return "\n".join(lines)
 
@@ -146,7 +148,8 @@ def _try_llm_answer(question: str, results: list[Any], jd_text: str) -> str | No
             f"semantic={result.semantic_score:.2f}%; label={result.recommendation}; "
             f"matched={', '.join(result.matched_skills[:12]) or 'none'}; "
             f"missing={', '.join(result.missing_skills[:12]) or 'none'}; "
-            f"experience={result.detected_resume_years:g}/{result.required_years:g} years."
+            f"experience={result.detected_resume_years:g}/{result.required_years:g} years; "
+            f"qdrant_job_metadata={_format_rag_evidence(result) or 'none'}."
         )
     prompt = PromptTemplate.from_template(CHATBOT_TEMPLATE)
     model_name = resolve_gemini_chat_model(api_key, os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_CHAT_MODEL))
@@ -186,7 +189,8 @@ def _try_llm_job_match_answer(question: str, results: list[Any], resume_text: st
             f"semantic={result.semantic_score:.2f}%; label={result.recommendation}; "
             f"matched_resume_skills={', '.join(result.matched_skills[:12]) or 'none'}; "
             f"missing_job_skills={', '.join(result.missing_skills[:12]) or 'none'}; "
-            f"experience={result.detected_resume_years:g}/{result.required_years:g} years."
+            f"experience={result.detected_resume_years:g}/{result.required_years:g} years; "
+            f"qdrant_job_metadata={_format_rag_evidence(result) or 'none'}."
         )
     prompt = PromptTemplate.from_template(JOB_MATCH_CHATBOT_TEMPLATE)
     model_name = resolve_gemini_chat_model(api_key, os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_CHAT_MODEL))
@@ -207,3 +211,22 @@ def _try_llm_job_match_answer(question: str, results: list[Any], resume_text: st
         return getattr(response, "content", str(response)).strip()
     except Exception:
         return None
+
+
+def _format_rag_evidence(result: Any, max_chunks: int = 2, max_chars: int = 220) -> str:
+    evidence = getattr(result, "rag_evidence", None) or []
+    lines = []
+    for item in evidence[:max_chunks]:
+        if not isinstance(item, dict):
+            continue
+        rank = item.get("rank")
+        score = float(item.get("score", 0.0) or 0.0)
+        job_id = item.get("job_id") or "unknown job"
+        job_title = item.get("job_title") or "unknown title"
+        job_category = item.get("category") or item.get("job_category") or "unknown category"
+        required_skills = shorten_text(str(item.get("required_skills") or ""), max_chars)
+        lines.append(
+            f"{job_title} ({job_category}), job {job_id}, rank {rank}, "
+            f"score {score:.4f}, required skills: {required_skills}"
+        )
+    return " | ".join(lines)
